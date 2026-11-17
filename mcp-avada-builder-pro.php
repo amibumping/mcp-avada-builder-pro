@@ -2754,11 +2754,16 @@ function mcp_avada_pro_list_pages(array $params)
         $per_page = 50;
     }
 
+    if (!in_array($post_type, array('page', 'post', 'any'), true)) {
+        $post_type = 'page';
+    }
+
     $query_args = array(
         'post_type' => $post_type === 'any' ? array('page', 'post') : $post_type,
         'post_status' => $status,
         'posts_per_page' => $per_page,
-        'meta_key' => '_fusion_builder_status',
+        // Avada stores the flag without a leading underscore.
+        'meta_key' => 'fusion_builder_status',
         'meta_value' => 'active',
         'orderby' => 'modified',
         'order' => 'DESC',
@@ -2768,6 +2773,10 @@ function mcp_avada_pro_list_pages(array $params)
     $pages = array();
 
     foreach ($query->posts as $post) {
+        // Do not reveal drafts/private posts the caller cannot edit.
+        if (!current_user_can('edit_post', $post->ID)) {
+            continue;
+        }
         $has_containers = preg_match_all('/\[fusion_builder_container/', $post->post_content, $m);
         $pages[] = array(
             'post_id' => $post->ID,

@@ -2176,15 +2176,20 @@ function mcp_avada_pro_validate_element_type($element_type)
         return new WP_Error('invalid_element_type', 'Element type must be a non-empty string');
     }
 
+    // Layout tags appear in both registries but are not column elements: adding one
+    // as an element nests a container/row inside a column. Use add-container instead.
+    $layout_tags = array('fusion_builder_container', 'fusion_builder_row', 'fusion_builder_column', 'fusion_builder_row_inner', 'fusion_builder_column_inner', 'fusion_builder_next_page', 'fusion_builder_form_step');
+    if (in_array($element_type, $layout_tags, true)) {
+        return new WP_Error('element_type_is_layout', 'Element type ' . sanitize_key($element_type) . ' is a layout tag, not an element. Use add-container for layout.');
+    }
+
     $registry = new MCP_Avada_Elements();
     $element = $registry->get_by_type($element_type);
 
-    // Fall back to Fusion Builder's live registry (all ~180 elements, not only the 56 static ones).
+    // Fall back to Fusion Builder's live registry (all ~140 elements, not only the 56 static ones).
     if (!$element) {
-        // Layout tags are in the live registry too, but they are not column elements.
-        $layout_tags = array('fusion_builder_container', 'fusion_builder_row', 'fusion_builder_column', 'fusion_builder_row_inner', 'fusion_builder_column_inner', 'fusion_builder_next_page', 'fusion_form_step');
         $runtime = mcp_avada_pro_get_runtime_elements();
-        $element = is_array($runtime) && isset($runtime[$element_type]) && !in_array($element_type, $layout_tags, true);
+        $element = is_array($runtime) && isset($runtime[$element_type]);
     }
 
     if (!$element) {

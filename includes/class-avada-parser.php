@@ -383,6 +383,13 @@ class MCP_Avada_Parser
                 $length = strlen($match[0][0]);
                 $end = $offset + $length;
 
+                // Guard: the pattern only anchors the tag prefix, so "[fusion_gallery" also
+                // matches "[fusion_gallery_image ...]". A real attribute string starts with
+                // whitespace, "/" or nothing; anything else means a different, longer tag.
+                if (isset($match[1][0]) && preg_match('/^[a-zA-Z0-9_-]/', $match[1][0])) {
+                    continue;
+                }
+
                 // Guard: do not parse [fusion_image] shortcodes that belong to a [fusion_images] block.
                 if ('fusion_image' === $type) {
                     $inside_fusion_images = false;
@@ -407,6 +414,37 @@ class MCP_Avada_Parser
 
                 $matched_ranges[] = array($offset, $offset + $length);
             }
+        }
+
+        // Keep only outermost matches: a known element nested inside another one
+        // (e.g. [fusion_toggle] inside [fusion_accordion]) already travels inside its
+        // parent's content and must not be emitted again as a standalone element.
+        $outermost = array();
+        foreach ($elements as $i => $candidate) {
+            $c_start = $candidate['_offset'];
+            $c_end = $c_start + $candidate['_length'];
+            $nested = false;
+            foreach ($elements as $j => $other) {
+                if ($i === $j) {
+                    continue;
+                }
+                $o_start = $other['_offset'];
+                $o_end = $o_start + $other['_length'];
+                $contains = $o_start <= $c_start && $c_end <= $o_end;
+                $same_span = $o_start === $c_start && $o_end === $c_end;
+                if ($contains && (!$same_span || $j < $i)) {
+                    $nested = true;
+                    break;
+                }
+            }
+            if (!$nested) {
+                $outermost[] = $candidate;
+            }
+        }
+        $elements = $outermost;
+        $matched_ranges = array();
+        foreach ($elements as $element) {
+            $matched_ranges[] = array($element['_offset'], $element['_offset'] + $element['_length']);
         }
 
         // PASS 2: Find ANY shortcodes that were NOT matched by known patterns

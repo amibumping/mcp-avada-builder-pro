@@ -2176,6 +2176,12 @@ function mcp_avada_pro_validate_element_type($element_type)
     $registry = new MCP_Avada_Elements();
     $element = $registry->get_by_type($element_type);
 
+    // Fall back to Fusion Builder's live registry (all ~180 elements, not only the 56 static ones).
+    if (!$element) {
+        $runtime = mcp_avada_pro_get_runtime_elements();
+        $element = is_array($runtime) && isset($runtime[$element_type]);
+    }
+
     if (!$element) {
         return new WP_Error('element_type_not_registered', 'Element type not found in registry: ' . sanitize_key($element_type));
     }
@@ -3824,6 +3830,9 @@ function mcp_avada_pro_enforce_responsive_policy(array $params)
 function mcp_avada_pro_get_runtime_elements()
 {
     global $all_fusion_builder_elements;
+    if (empty($all_fusion_builder_elements)) {
+        mcp_avada_pro_init_element_maps();
+    }
     if (!empty($all_fusion_builder_elements) && is_array($all_fusion_builder_elements)) {
         return $all_fusion_builder_elements;
     }
@@ -3832,6 +3841,38 @@ function mcp_avada_pro_get_runtime_elements()
         return $fusion_builder_elements;
     }
     return null;
+}
+
+/**
+ * Populate Fusion Builder's element maps outside the editor (REST / MCP requests).
+ *
+ * Fusion only registers elements, and only keeps full param definitions, when
+ * the editor is loading ($pagenow === 'post.php'). Pretend to be the editor
+ * just for the registration and restore $pagenow afterwards.
+ */
+function mcp_avada_pro_init_element_maps(): void
+{
+    static $done = false;
+    if ($done || !function_exists('fusion_builder_map')) {
+        return;
+    }
+    $done = true;
+
+    $previous_pagenow = $GLOBALS['pagenow'] ?? null;
+    $GLOBALS['pagenow'] = 'post.php';
+
+    if (function_exists('awb_maybe_init_element_maps')) {
+        awb_maybe_init_element_maps();
+    } else {
+        if (!did_action('fusion_builder_before_init')) {
+            do_action('fusion_builder_before_init');
+        }
+        if (!did_action('fusion_builder_wp_loaded')) {
+            do_action('fusion_builder_wp_loaded');
+        }
+    }
+
+    $GLOBALS['pagenow'] = $previous_pagenow;
 }
 
 /**

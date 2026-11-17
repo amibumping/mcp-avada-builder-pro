@@ -94,14 +94,23 @@ class MCP_Avada_Pro_Rendered_CSS_Variable_Verifier implements MCP_Avada_Pro_Modu
      */
     public static function fetch_site_page(string $url)
     {
-        $site_host = wp_parse_url(home_url(), PHP_URL_HOST);
+        $site = wp_parse_url(home_url());
+        $site_host = isset($site['host']) ? $site['host'] : '';
         $parts = wp_parse_url($url);
+        $default_port = function ($p) {
+            if (!empty($p['port'])) {
+                return (int) $p['port'];
+            }
+            return (isset($p['scheme']) && 'https' === strtolower($p['scheme'])) ? 443 : 80;
+        };
 
+        // Same host AND same port: other ports on this host can be different services.
         if (
             empty($parts['host'])
             || empty($parts['scheme'])
             || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
             || strtolower($parts['host']) !== strtolower((string) $site_host)
+            || $default_port($parts) !== $default_port($site)
         ) {
             return new WP_Error('mcp_avada_pro_url_not_allowed', 'page_url must be a URL on this site (' . $site_host . ').');
         }

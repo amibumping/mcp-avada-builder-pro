@@ -174,7 +174,7 @@ class MCP_Avada_Parser
                 if ($depth === 0) {
                     $attr_str = substr($content, $open_pos + strlen($open_tag), $attr_start - $open_pos - strlen($open_tag));
                     $inner = substr($content, $attr_start + 1, $next_close - $attr_start - 1);
-                    $results[] = array(1 => $attr_str, 2 => $inner);
+                    $results[] = array(0 => $open_pos, 1 => $attr_str, 2 => $inner);
                     $found_close = true;
                 }
                 $search_pos = $next_close + 1;
@@ -198,14 +198,22 @@ class MCP_Avada_Parser
         );
 
         if (empty(trim($content))) {
+            if ($include_content) {
+                $structure = $this->seal($structure, null, '', (string) $content, $this->new_uid(), array());
+            }
             return $structure;
         }
+
+        $root_uid = $this->new_uid();
+        $root_spans = array();
 
         // P2-2: Use recursive parse_nested_shortcode instead of non-greedy regex.
         // The old regex (.*?) failed on nested/inner containers and malformed content.
         $container_matches = $this->parse_nested_shortcode($content, 'fusion_builder_container');
 
         foreach ($container_matches as $cindex => $cmatch) {
+            $container_uid = $this->new_uid();
+            $container_spans = array();
             $container = array(
                 'id' => 'container_' . $cindex,
                 'index' => $cindex,
@@ -220,6 +228,8 @@ class MCP_Avada_Parser
             $row_matches = $this->parse_nested_shortcode($cmatch[2], 'fusion_builder_row');
 
             foreach ($row_matches as $rindex => $rmatch) {
+                $row_uid = $this->new_uid();
+                $row_spans = array();
                 $row = array(
                     'id' => 'row_' . $cindex . '_' . $rindex,
                     'index' => $rindex,
@@ -244,71 +254,95 @@ class MCP_Avada_Parser
                     );
 
                     if ($include_content) {
+                        $column_uid = $this->new_uid();
+                        $column_spans = array();
                         $column['raw_content'] = $colmatch[2];
 
                         // P1-2: Parse inner rows/columns within this column
                         $inner_row_matches = $this->parse_nested_shortcode($colmatch[2], 'fusion_builder_row_inner');
 
-                        if (!empty($inner_row_matches)) {
-                            foreach ($inner_row_matches as $ir_index => $ir_match) {
-                                $inner_row = array(
-                                    'id' => 'inner_row_' . $ir_index,
-                                    'index' => $ir_index,
-                                    'attributes' => $this->parse_attributes($ir_match[1]),
-                                    'inner_columns' => array(),
+                        // Blank out inner rows (same length) so element offsets stay valid in the column text.
+                        $masked = $colmatch[2];
+
+                        foreach ($inner_row_matches as $ir_index => $ir_match) {
+                            $inner_row_uid = $this->new_uid();
+                            $inner_row_spans = array();
+                            $inner_row = array(
+                                'id' => 'inner_row_' . $ir_index,
+                                'index' => $ir_index,
+                                'attributes' => $this->parse_attributes($ir_match[1]),
+                                'inner_columns' => array(),
+                            );
+
+                            $inner_col_matches = $this->parse_nested_shortcode($ir_match[2], 'fusion_builder_column_inner');
+
+                            foreach ($inner_col_matches as $ic_index => $ic_match) {
+                                $inner_column_uid = $this->new_uid();
+                                $inner_elements = $this->parse_elements(
+                                    $ic_match[2],
+                                    $cindex,
+                                    $rindex,
+                                    $colindex . '_inner_' . $ir_index . '_' . $ic_index
+                                );
+                                $inner_column = array(
+                                    'id' => 'inner_column_' . $ic_index,
+                                    'index' => $ic_index,
+                                    'attributes' => $this->parse_attributes($ic_match[1]),
+                                    'type' => $this->get_column_type($ic_match[1]),
+                                    'elements' => $this->adopt($inner_elements, $inner_column_uid),
                                 );
 
-                                $inner_col_matches = $this->parse_nested_shortcode($ir_match[2], 'fusion_builder_column_inner');
-
-                                foreach ($inner_col_matches as $ic_index => $ic_match) {
-                                    $inner_column = array(
-                                        'id' => 'inner_column_' . $ic_index,
-                                        'index' => $ic_index,
-                                        'attributes' => $this->parse_attributes($ic_match[1]),
-                                        'type' => $this->get_column_type($ic_match[1]),
-                                        'elements' => $this->parse_elements(
-                                            $ic_match[2],
-                                            $cindex,
-                                            $rindex,
-                                            $colindex . '_inner_' . $ir_index . '_' . $ic_index
-                                        ),
-                                    );
-
-                                    $inner_row['inner_columns'][] = $this->seal($inner_column, 'fusion_builder_column_inner', $ic_match[1], $ic_match[2], count($inner_column['elements']));
-                                }
-
-                                $column['inner_rows'][] = $this->seal($inner_row, 'fusion_builder_row_inner', $ir_match[1], $ir_match[2], count($inner_row['inner_columns']));
+                                $inner_column = $this->seal($inner_column, 'fusion_builder_column_inner', $ic_match[1], $ic_match[2], $inner_column_uid, $this->spans_of($inner_column['elements'], 0));
+                                $inner_row_spans[] = array($ic_match[0], strlen($inner_column['_raw']), 0);
+                                $inner_column['_at'] = $ic_match[0];
+                                $inner_column['_owner'] = $inner_row_uid;
+                                $inner_row['inner_columns'][] = $inner_column;
                             }
 
-                            // Parse elements that are NOT inside inner rows
-                            // Strip inner row content before parsing elements at this level
-                            $col_content_without_inner = $colmatch[2];
-                            foreach ($inner_row_matches as $ir_match) {
-                                $inner_raw = '[fusion_builder_row_inner' . $ir_match[1] . ']' . $ir_match[2] . '[/fusion_builder_row_inner]';
-                                $col_content_without_inner = str_replace($inner_raw, '', $col_content_without_inner);
-                            }
-                            $column['elements'] = $this->parse_elements($col_content_without_inner, $cindex, $rindex, $colindex);
-                        } else {
-                            $column['elements'] = $this->parse_elements($colmatch[2], $cindex, $rindex, $colindex);
+                            $inner_row = $this->seal($inner_row, 'fusion_builder_row_inner', $ir_match[1], $ir_match[2], $inner_row_uid, $inner_row_spans);
+                            $inner_row['_at'] = $ir_match[0];
+                            $inner_row['_owner'] = $column_uid;
+                            $column['inner_rows'][] = $inner_row;
+
+                            $masked = substr_replace($masked, str_repeat(' ', strlen($inner_row['_raw'])), $ir_match[0], strlen($inner_row['_raw']));
                         }
 
-                        $column = $this->seal($column, 'fusion_builder_column', $colmatch[1], $colmatch[2], count($column['elements']) + count($column['inner_rows']));
+                        $column['elements'] = $this->adopt($this->parse_elements($masked, $cindex, $rindex, $colindex), $column_uid);
+
+                        $column_spans = $this->spans_of($column['elements'], 0);
+                        foreach ($column['inner_rows'] as $inner_row) {
+                            $column_spans[] = array($inner_row['_at'], strlen($inner_row['_raw']), 1);
+                        }
+
+                        $column = $this->seal($column, 'fusion_builder_column', $colmatch[1], $colmatch[2], $column_uid, $column_spans);
+                        $column['_at'] = $colmatch[0];
+                        $column['_owner'] = $row_uid;
+                        $row_spans[] = array($colmatch[0], strlen($column['_raw']), 0);
                     }
 
                     $row['columns'][] = $column;
                 }
 
-                $container['rows'][] = $include_content ? $this->seal($row, 'fusion_builder_row', $rmatch[1], $rmatch[2], count($row['columns'])) : $row;
+                if ($include_content) {
+                    $row = $this->seal($row, 'fusion_builder_row', $rmatch[1], $rmatch[2], $row_uid, $row_spans);
+                    $row['_at'] = $rmatch[0];
+                    $row['_owner'] = $container_uid;
+                    $container_spans[] = array($rmatch[0], strlen($row['_raw']), 0);
+                }
+                $container['rows'][] = $row;
             }
 
-            $structure['containers'][] = $include_content ? $this->seal($container, 'fusion_builder_container', $cmatch[1], $cmatch[2], count($container['rows'])) : $container;
+            if ($include_content) {
+                $container = $this->seal($container, 'fusion_builder_container', $cmatch[1], $cmatch[2], $container_uid, $container_spans);
+                $container['_at'] = $cmatch[0];
+                $container['_owner'] = $root_uid;
+                $root_spans[] = array($cmatch[0], strlen($container['_raw']), 0);
+            }
+            $structure['containers'][] = $container;
         }
 
         if ($include_content) {
-            $structure['_raw'] = $content;
-            $structure['_raw_inner'] = $content;
-            $structure['_n'] = count($structure['containers']);
-            $structure['_hash'] = $this->fingerprint($structure);
+            $structure = $this->seal($structure, null, '', $content, $root_uid, $root_spans);
         }
 
         return $structure;
@@ -318,10 +352,19 @@ class MCP_Avada_Parser
     {
         $attributes = array();
 
-        preg_match_all('/(\w+)=["\']([^"\']*)["\']/', $attr_string, $matches, PREG_SET_ORDER);
+        // Same grammar as shortcode_parse_atts(): a double-quoted value may contain
+        // apostrophes ("Bob's") and vice versa. Later duplicates win, as in WordPress.
+        $pattern = '/([\w-]+)\s*=\s*"([^"]*)"(?:\s|$)|([\w-]+)\s*=\s*\'([^\']*)\'(?:\s|$)|([\w-]+)\s*=\s*([^\s\'"]+)(?:\s|$)/';
+        preg_match_all($pattern, (string) $attr_string . ' ', $matches, PREG_SET_ORDER);
 
         foreach ($matches as $match) {
-            $attributes[$match[1]] = $match[2];
+            if (isset($match[1]) && '' !== $match[1]) {
+                $attributes[$match[1]] = $match[2];
+            } elseif (isset($match[3]) && '' !== $match[3]) {
+                $attributes[$match[3]] = $match[4];
+            } elseif (isset($match[5]) && '' !== $match[5]) {
+                $attributes[$match[5]] = $match[6];
+            }
         }
 
         return $attributes;
@@ -444,32 +487,9 @@ class MCP_Avada_Parser
             }
         }
 
-        // Keep only outermost matches: a known element nested inside another one
-        // (e.g. [fusion_toggle] inside [fusion_accordion]) already travels inside its
-        // parent's content and must not be emitted again as a standalone element.
-        $outermost = array();
-        foreach ($elements as $i => $candidate) {
-            $c_start = $candidate['_offset'];
-            $c_end = $c_start + $candidate['_length'];
-            $nested = false;
-            foreach ($elements as $j => $other) {
-                if ($i === $j) {
-                    continue;
-                }
-                $o_start = $other['_offset'];
-                $o_end = $o_start + $other['_length'];
-                $contains = $o_start <= $c_start && $c_end <= $o_end;
-                $same_span = $o_start === $c_start && $o_end === $c_end;
-                if ($contains && (!$same_span || $j < $i)) {
-                    $nested = true;
-                    break;
-                }
-            }
-            if (!$nested) {
-                $outermost[] = $candidate;
-            }
-        }
-        $elements = $outermost;
+        // A known element nested in another (e.g. [fusion_toggle] in [fusion_accordion]) travels
+        // inside its parent's content and must not be emitted again as a standalone element.
+        $elements = $this->keep_outermost($elements);
         $matched_ranges = array();
         foreach ($elements as $element) {
             $matched_ranges[] = array($element['_offset'], $element['_offset'] + $element['_length']);
@@ -518,6 +538,9 @@ class MCP_Avada_Parser
             $matched_ranges[] = array($offset, $offset + $length);
         }
 
+        // Known elements wrapped by an unknown shortcode belong to that passthrough.
+        $elements = $this->keep_outermost($elements);
+
         // Sort by position in source content to preserve document order
         usort($elements, function ($a, $b) {
             return $a['_offset'] - $b['_offset'];
@@ -528,6 +551,7 @@ class MCP_Avada_Parser
             $type_label = $element['type'] === '__passthrough__' ? $element['shortcode_tag'] : $element['type'];
             $element['id'] = $type_label . '_' . $index;
             $element['path'] = "container_{$cindex}/row_{$rindex}/column_{$colindex}/{$element['id']}";
+            $element['_at'] = $element['_offset'];
             unset($element['_offset']);
             unset($element['_length']);
             $element['_hash'] = $this->fingerprint($element);
@@ -535,6 +559,32 @@ class MCP_Avada_Parser
         unset($element);
 
         return $elements;
+    }
+
+    /**
+     * Drop matches contained in another match (the first one wins for identical spans).
+     */
+    private function keep_outermost(array $elements)
+    {
+        $outermost = array();
+        foreach ($elements as $i => $candidate) {
+            $c_start = $candidate['_offset'];
+            $c_end = $c_start + $candidate['_length'];
+            foreach ($elements as $j => $other) {
+                if ($i === $j) {
+                    continue;
+                }
+                $o_start = $other['_offset'];
+                $o_end = $o_start + $other['_length'];
+                $contains = $o_start <= $c_start && $c_end <= $o_end;
+                $same_span = $o_start === $c_start && $o_end === $c_end;
+                if ($contains && (!$same_span || $j < $i)) {
+                    continue 2;
+                }
+            }
+            $outermost[] = $candidate;
+        }
+        return $outermost;
     }
 
     public function extract_all_elements($structure)
@@ -688,73 +738,205 @@ class MCP_Avada_Parser
     }
 
     /**
-     * Rebuild a node's inner text by replacing each child's original text in place.
+     * Rebuild a node's inner text from its original text.
      *
-     * Returns null when that is not safe: a child is new, was moved, reordered,
-     * duplicated or deleted, or its original text is ambiguous.
+     * Every original child occupies a slot (its original byte span). Text between
+     * slots (loose text, whitespace, unparsed markup) is always kept. Children still
+     * owned by this node fill the slots of their list in their new order, so edits,
+     * reorders and deletions only touch slots. New children (or children moved in
+     * from another node) are inserted right after their previous sibling, or before
+     * their next one, or appended at the end when the list had no children.
      *
-     * @param array $node        Parsed node carrying _raw_inner and _n.
-     * @param array $child_lists List of array(children, render callback).
+     * Returns null when the node carries no original text (it was created by a client).
+     *
+     * @param array $node        Parsed node carrying _raw_inner, _spans and _uid.
+     * @param array $child_lists List of array(children, render callback); the list index
+     *                           matches the third field of each span.
      * @return string|null
      */
     private function splice(array $node, array $child_lists)
     {
-        if (!isset($node['_raw_inner'], $node['_n'])) {
+        if (!isset($node['_raw_inner'], $node['_spans'], $node['_uid']) || !is_array($node['_spans'])) {
             return null;
         }
 
-        $raw = $node['_raw_inner'];
-        $items = array();
-        foreach ($child_lists as $list) {
+        $raw = (string) $node['_raw_inner'];
+        $spans = $node['_spans'];
+        $fill = array();
+        $before = array();
+        $after = array();
+        $tail = '';
+
+        foreach ($child_lists as $list_index => $list) {
             list($children, $render) = $list;
-            $last = -1;
-            foreach ($children as $child) {
-                if (empty($child['_raw']) || 1 !== substr_count($raw, $child['_raw'])) {
-                    return null;
+            $children = array_values(is_array($children) ? $children : array());
+
+            $list_slots = array();
+            foreach ($spans as $span) {
+                if ($span[2] === $list_index) {
+                    $list_slots[] = $span[0];
                 }
-                $at = strpos($raw, $child['_raw']);
-                if ($at <= $last) {
-                    return null;
+            }
+
+            // Children that still belong here, each original slot used once (a duplicated
+            // element carries the same _at and is treated as a new child).
+            $kept = array();
+            $used = array();
+            foreach ($children as $i => $child) {
+                $at = isset($child['_at']) ? $child['_at'] : null;
+                if (is_array($child) && isset($child['_owner']) && $child['_owner'] === $node['_uid']
+                    && null !== $at && in_array($at, $list_slots, true) && !isset($used[$at])) {
+                    $used[$at] = true;
+                    $kept[] = $i;
                 }
-                $last = $at;
-                $items[] = array($at, $child, $render);
+            }
+
+            $slots = array_keys($used);
+            sort($slots);
+            $slot_of = array();
+            foreach ($kept as $n => $i) {
+                $slot_of[$i] = $slots[$n];
+                $fill[$slots[$n]] = $render($children[$i]);
+            }
+
+            foreach ($children as $i => $child) {
+                if (isset($slot_of[$i])) {
+                    continue;
+                }
+                $text = $render($child);
+                $anchor = null;
+                for ($j = $i - 1; $j >= 0; $j--) {
+                    if (isset($slot_of[$j])) {
+                        $anchor = $slot_of[$j];
+                        break;
+                    }
+                }
+                if (null !== $anchor) {
+                    $after[$anchor][] = $text;
+                    continue;
+                }
+                for ($j = $i + 1; $j < count($children); $j++) {
+                    if (isset($slot_of[$j])) {
+                        $anchor = $slot_of[$j];
+                        break;
+                    }
+                }
+                if (null !== $anchor) {
+                    $before[$anchor][] = $text;
+                } elseif (!empty($list_slots)) {
+                    // Every original child of this list was removed: take the first slot's place.
+                    $before[$list_slots[0]][] = $text;
+                } else {
+                    $tail .= $text;
+                }
             }
         }
-
-        if (count($items) !== (int) $node['_n']) {
-            return null;
-        }
-
-        usort($items, function ($a, $b) {
-            return $a[0] - $b[0];
-        });
 
         $out = '';
         $pos = 0;
-        foreach ($items as $item) {
-            list($at, $child, $render) = $item;
-            if ($at < $pos) {
-                return null;
-            }
-            $out .= substr($raw, $pos, $at - $pos) . $render($child);
-            $pos = $at + strlen($child['_raw']);
+        foreach ($spans as $span) {
+            list($at, $length) = $span;
+            $out .= substr($raw, $pos, $at - $pos);
+            $out .= isset($before[$at]) ? implode('', $before[$at]) : '';
+            $out .= isset($fill[$at]) ? $fill[$at] : '';
+            $out .= isset($after[$at]) ? implode('', $after[$at]) : '';
+            $pos = $at + $length;
         }
 
-        return $out . substr($raw, $pos);
+        return $out . substr($raw, $pos) . $tail;
     }
 
     /**
-     * Record a node's original text and fingerprint so generate() can reuse it.
+     * Record a node's original text, child slots and fingerprint so generate() can reuse them.
+     *
+     * @param string|null $tag   Shortcode tag, or null for the document root.
+     * @param array       $spans List of array(offset, length, list index) of the original children.
      */
-    private function seal(array $node, $tag, $attr_string, $inner, $child_count)
+    private function seal(array $node, $tag, $attr_string, $inner, $uid, array $spans)
     {
-        $node['_open'] = '[' . $tag . $attr_string . ']';
+        usort($spans, function ($a, $b) {
+            return $a[0] - $b[0];
+        });
+        $node['_uid'] = $uid;
+        $node['_spans'] = $spans;
+        $node['_open'] = null === $tag ? '' : '[' . $tag . $attr_string . ']';
         $node['_raw_inner'] = $inner;
-        $node['_raw'] = $node['_open'] . $inner . '[/' . $tag . ']';
+        $node['_raw'] = null === $tag ? $inner : $node['_open'] . $inner . '[/' . $tag . ']';
         $node['_attrs_hash'] = md5(serialize(isset($node['attributes']) ? $node['attributes'] : array()));
-        $node['_n'] = $child_count;
         $node['_hash'] = $this->fingerprint($node);
         return $node;
+    }
+
+    private function new_uid()
+    {
+        static $counter = 0;
+        return 'n' . (++$counter);
+    }
+
+    /**
+     * Mark parsed elements as children of a node.
+     */
+    private function adopt(array $elements, $uid)
+    {
+        foreach ($elements as &$element) {
+            $element['_owner'] = $uid;
+        }
+        unset($element);
+        return $elements;
+    }
+
+    private function spans_of(array $children, $list_index)
+    {
+        $spans = array();
+        foreach ($children as $child) {
+            if (isset($child['_at'], $child['_raw'])) {
+                $spans[] = array($child['_at'], strlen($child['_raw']), $list_index);
+            }
+        }
+        return $spans;
+    }
+
+    /**
+     * Re-attach the private source data of a freshly parsed structure to a structure
+     * supplied by a client (which never carries private keys), matching nodes by id
+     * and type. Untouched nodes are then written back verbatim by generate().
+     *
+     * @param array $client Structure from the client, private keys already stripped.
+     * @param array $stored Result of parse() on the current post content.
+     * @return array
+     */
+    public function graft($client, $stored)
+    {
+        if (!is_array($client) || !is_array($stored)) {
+            return $client;
+        }
+        foreach ($stored as $key => $value) {
+            if (is_string($key) && '' !== $key && '_' === $key[0]) {
+                $client[$key] = $value;
+            }
+        }
+        foreach (array('containers', 'rows', 'columns', 'elements', 'inner_rows', 'inner_columns') as $list) {
+            if (empty($client[$list]) || !is_array($client[$list]) || empty($stored[$list]) || !is_array($stored[$list])) {
+                continue;
+            }
+            $by_id = array();
+            foreach ($stored[$list] as $node) {
+                if (is_array($node) && isset($node['id'])) {
+                    $by_id[$node['id']] = $node;
+                }
+            }
+            foreach ($client[$list] as $i => $node) {
+                if (!is_array($node) || !isset($node['id'], $by_id[$node['id']])) {
+                    continue;
+                }
+                $match = $by_id[$node['id']];
+                if ((isset($node['type']) ? $node['type'] : null) !== (isset($match['type']) ? $match['type'] : null)) {
+                    continue;
+                }
+                $client[$list][$i] = $this->graft($node, $match);
+            }
+        }
+        return $client;
     }
 
     private function is_pristine($node)

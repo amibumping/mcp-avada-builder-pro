@@ -1856,7 +1856,10 @@ function mcp_avada_pro_replace_content(array $params)
         return $struct_validation;
     }
 
+    // Never trust private source keys from the client; re-attach them from the stored
+    // content so untouched containers/elements are written back verbatim.
     $parser = new MCP_Avada_Parser();
+    $structure = $parser->graft(MCP_Avada_Parser::strip_private_keys($structure), $parser->parse($post->post_content, true));
     $content = $parser->generate($structure);
 
     // P2-5: Reject empty/trivial content that would wipe the page
@@ -2178,8 +2181,10 @@ function mcp_avada_pro_validate_element_type($element_type)
 
     // Fall back to Fusion Builder's live registry (all ~180 elements, not only the 56 static ones).
     if (!$element) {
+        // Layout tags are in the live registry too, but they are not column elements.
+        $layout_tags = array('fusion_builder_container', 'fusion_builder_row', 'fusion_builder_column', 'fusion_builder_row_inner', 'fusion_builder_column_inner', 'fusion_builder_next_page', 'fusion_form_step');
         $runtime = mcp_avada_pro_get_runtime_elements();
-        $element = is_array($runtime) && isset($runtime[$element_type]);
+        $element = is_array($runtime) && isset($runtime[$element_type]) && !in_array($element_type, $layout_tags, true);
     }
 
     if (!$element) {
@@ -2252,7 +2257,7 @@ function mcp_avada_pro_validate_media_attributes($element_type, $attributes)
         if (isset($attributes['image_id']) && $attributes['image_id'] !== '') {
             // Avada stores either "123" or "123|size-slug" (e.g. "123|full", "123|fusion-600").
             $image_id = (string) $attributes['image_id'];
-            if (!preg_match('/^([1-9][0-9]*)(\|[a-z0-9_-]+)?$/i', $image_id, $image_id_parts)) {
+            if (!preg_match('/^([1-9][0-9]*)(\|[a-z0-9_-]+)?\z/i', $image_id, $image_id_parts)) {
                 return new WP_Error(
                     'invalid_media_field',
                     'image_id must be an attachment ID, optionally with a size ("123" or "123|full"). Got: ' . $image_id
@@ -2764,9 +2769,12 @@ function mcp_avada_pro_list_pages(array $params)
         'post_type' => $post_type === 'any' ? array('page', 'post') : $post_type,
         'post_status' => $status,
         'posts_per_page' => $per_page,
-        // Avada stores the flag without a leading underscore.
-        'meta_key' => 'fusion_builder_status',
-        'meta_value' => 'active',
+        // Avada stores the flag without a leading underscore; older writes of this plugin used one.
+        'meta_query' => array(
+            'relation' => 'OR',
+            array('key' => 'fusion_builder_status', 'value' => 'active'),
+            array('key' => '_fusion_builder_status', 'value' => 'active'),
+        ),
         'orderby' => 'modified',
         'order' => 'DESC',
     );
@@ -2795,7 +2803,8 @@ function mcp_avada_pro_list_pages(array $params)
     return array(
         'success' => true,
         'data' => array(
-            'total' => $query->found_posts,
+            // Count only what the caller may see; found_posts would leak hidden posts.
+            'total' => count($pages),
             'count' => count($pages),
             'pages' => $pages,
         ),

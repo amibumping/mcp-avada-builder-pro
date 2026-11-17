@@ -1947,7 +1947,7 @@ function mcp_avada_pro_clean_duplicates(array $params)
         foreach ($container['rows'] as &$row) {
             foreach ($row['columns'] as &$column) {
                 $column['elements'] = array_values(array_filter($column['elements'], function ($element) use (&$seen, &$duplicates) {
-                    $key = $element['type'] . '|' . md5($element['content'] . json_encode($element['attributes']));
+                    $key = mcp_avada_pro_element_dedupe_key($element);
                     if (isset($seen[$key])) {
                         $duplicates++;
                         return false;
@@ -2323,6 +2323,20 @@ function mcp_avada_pro_validate_column_type($column_type)
         return new WP_Error('invalid_column_type', 'Column type not supported. Allowed: ' . implode(', ', $supported));
     }
     return true;
+}
+
+/**
+ * Helper: Key used to detect duplicate elements.
+ * Unknown elements are parsed as __passthrough__ with empty attributes/content,
+ * so their raw shortcode must be part of the key or every one of them collides.
+ *
+ * @param array $element Parsed element.
+ * @return string
+ */
+function mcp_avada_pro_element_dedupe_key(array $element)
+{
+    $raw = ('__passthrough__' === ($element['type'] ?? '')) ? (string) ($element['raw_shortcode'] ?? '') : '';
+    return ($element['type'] ?? '') . '|' . md5($raw . ($element['content'] ?? '') . json_encode($element['attributes'] ?? array()));
 }
 
 /**
@@ -4424,7 +4438,7 @@ function mcp_avada_pro_validate_page_structure(array $params)
     $seen_hashes = array();
     $duplicate_count = 0;
     foreach ($all_elements as $el) {
-        $hash = $el['type'] . '|' . md5(($el['content'] ?? '') . json_encode($el['attributes'] ?? array()));
+        $hash = mcp_avada_pro_element_dedupe_key($el);
         $path = $el['path'] ?? 'unknown';
         if (isset($seen_hashes[$hash])) {
             $duplicate_count++;
@@ -4506,7 +4520,7 @@ function mcp_avada_pro_repair_shortcode_tree(array $params)
                 $seen = array();
                 $original_count = count($column['elements']);
                 $column['elements'] = array_values(array_filter($column['elements'], function ($element) use (&$seen, &$duplicates_removed) {
-                    $hash = $element['type'] . '|' . md5(($element['content'] ?? '') . json_encode($element['attributes'] ?? array()));
+                    $hash = mcp_avada_pro_element_dedupe_key($element);
                     if (isset($seen[$hash])) {
                         $duplicates_removed++;
                         return false;

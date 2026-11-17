@@ -1415,7 +1415,7 @@ function mcp_avada_pro_get_page_structure(array $params)
             'title' => $post->post_title,
             'builder_enabled' => get_post_meta($post_id, 'fusion_builder_status', true) === 'active' || get_post_meta($post_id, '_fusion_builder_status', true) === 'active',
             'containers_count' => count($structure['containers']),
-            'structure' => $structure,
+            'structure' => MCP_Avada_Parser::strip_private_keys($structure),
         ),
     );
 }

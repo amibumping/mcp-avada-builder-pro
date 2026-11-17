@@ -274,10 +274,10 @@ class MCP_Avada_Parser
                                         ),
                                     );
 
-                                    $inner_row['inner_columns'][] = $inner_column;
+                                    $inner_row['inner_columns'][] = $this->seal($inner_column, 'fusion_builder_column_inner', $ic_match[1], $ic_match[2], count($inner_column['elements']));
                                 }
 
-                                $column['inner_rows'][] = $inner_row;
+                                $column['inner_rows'][] = $this->seal($inner_row, 'fusion_builder_row_inner', $ir_match[1], $ir_match[2], count($inner_row['inner_columns']));
                             }
 
                             // Parse elements that are NOT inside inner rows
@@ -291,15 +291,24 @@ class MCP_Avada_Parser
                         } else {
                             $column['elements'] = $this->parse_elements($colmatch[2], $cindex, $rindex, $colindex);
                         }
+
+                        $column = $this->seal($column, 'fusion_builder_column', $colmatch[1], $colmatch[2], count($column['elements']) + count($column['inner_rows']));
                     }
 
                     $row['columns'][] = $column;
                 }
 
-                $container['rows'][] = $row;
+                $container['rows'][] = $include_content ? $this->seal($row, 'fusion_builder_row', $rmatch[1], $rmatch[2], count($row['columns'])) : $row;
             }
 
-            $structure['containers'][] = $container;
+            $structure['containers'][] = $include_content ? $this->seal($container, 'fusion_builder_container', $cmatch[1], $cmatch[2], count($container['rows'])) : $container;
+        }
+
+        if ($include_content) {
+            $structure['_raw'] = $content;
+            $structure['_raw_inner'] = $content;
+            $structure['_n'] = count($structure['containers']);
+            $structure['_hash'] = $this->fingerprint($structure);
         }
 
         return $structure;
@@ -376,18 +385,34 @@ class MCP_Avada_Parser
                 continue;
             }
 
-            preg_match_all($pattern, $content, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+            // Prefer WordPress' own shortcode grammar: it is exactly how the page is rendered,
+            // so tag boundaries ("fusion_gallery" vs "fusion_gallery_image") and enclosing vs
+            // self-closing forms match the front end. The static pattern is only a fallback.
+            $use_wp_grammar = function_exists('get_shortcode_regex');
+            $regex = $use_wp_grammar ? '/' . get_shortcode_regex(array($type)) . '/s' : $pattern;
+
+            preg_match_all($regex, $content, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
 
             foreach ($matches as $match) {
                 $offset = $match[0][1];
                 $length = strlen($match[0][0]);
                 $end = $offset + $length;
 
-                // Guard: the pattern only anchors the tag prefix, so "[fusion_gallery" also
-                // matches "[fusion_gallery_image ...]". A real attribute string starts with
-                // whitespace, "/" or nothing; anything else means a different, longer tag.
-                if (isset($match[1][0]) && preg_match('/^[a-zA-Z0-9_-]/', $match[1][0])) {
-                    continue;
+                if ($use_wp_grammar) {
+                    // [[tag]] is an escaped shortcode, rendered literally.
+                    if ('[' === $match[1][0] && ']' === ($match[6][0] ?? '')) {
+                        continue;
+                    }
+                    $attr_string = $match[3][0];
+                    $inner = (isset($match[5]) && -1 !== $match[5][1]) ? $match[5][0] : '';
+                } else {
+                    // The static pattern only anchors the tag prefix, so "[fusion_gallery" also
+                    // matches "[fusion_gallery_image ...]"; a longer tag name means another element.
+                    if (isset($match[1][0]) && preg_match('/^[a-zA-Z0-9_-]/', $match[1][0])) {
+                        continue;
+                    }
+                    $attr_string = $match[1][0];
+                    $inner = isset($match[2]) ? $match[2][0] : '';
                 }
 
                 // Guard: do not parse [fusion_image] shortcodes that belong to a [fusion_images] block.
@@ -404,12 +429,15 @@ class MCP_Avada_Parser
                     }
                 }
 
+                $raw = $match[0][0];
                 $elements[] = array(
                     'type' => $type,
-                    'attributes' => $this->parse_attributes($match[1][0]),
-                    'content' => isset($match[2]) ? $match[2][0] : '',
+                    'attributes' => $this->parse_attributes($attr_string),
+                    'content' => $inner,
                     '_offset' => $offset,
                     '_length' => $length,
+                    '_raw' => $raw,
+                    '_closed' => substr($raw, -strlen('[/' . $type . ']')) === '[/' . $type . ']',
                 );
 
                 $matched_ranges[] = array($offset, $offset + $length);
@@ -484,6 +512,7 @@ class MCP_Avada_Parser
                 'content' => '',
                 '_offset' => $offset,
                 '_length' => $length,
+                '_raw' => $match[0][0],
             );
 
             $matched_ranges[] = array($offset, $offset + $length);
@@ -501,6 +530,7 @@ class MCP_Avada_Parser
             $element['path'] = "container_{$cindex}/row_{$rindex}/column_{$colindex}/{$element['id']}";
             unset($element['_offset']);
             unset($element['_length']);
+            $element['_hash'] = $this->fingerprint($element);
         }
         unset($element);
 
@@ -549,70 +579,228 @@ class MCP_Avada_Parser
 
     public function generate($structure)
     {
-        $content = '';
-
         if (!isset($structure['containers'])) {
-            return $content;
+            return '';
         }
 
+        // Lossless path: untouched content is written back byte for byte.
+        if ($this->is_pristine($structure)) {
+            return $structure['_raw'];
+        }
+
+        $spliced = $this->splice($structure, array(
+            array($structure['containers'], function ($container) {
+                return $this->generate_container($container);
+            }),
+        ));
+        if (null !== $spliced) {
+            return $spliced;
+        }
+
+        $content = '';
         foreach ($structure['containers'] as $container) {
-            $container_attrs = $this->build_attributes($container['attributes']);
-            $content .= '[fusion_builder_container' . $container_attrs . ']';
+            $content .= $this->generate_container($container);
+        }
+        return $content;
+    }
 
-            if (isset($container['rows'])) {
-                foreach ($container['rows'] as $row) {
-                    $row_attrs = $this->build_attributes($row['attributes']);
-                    $content .= '[fusion_builder_row' . $row_attrs . ']';
+    private function generate_container($container)
+    {
+        $rows = isset($container['rows']) ? $container['rows'] : array();
+        $render = function ($row) {
+            return $this->generate_row($row);
+        };
+        return $this->emit_node($container, 'fusion_builder_container', array(array($rows, $render)), function () use ($rows, $render) {
+            return implode('', array_map($render, $rows));
+        });
+    }
 
-                    if (isset($row['columns'])) {
-                        foreach ($row['columns'] as $column) {
-                            $col_attrs = $this->build_attributes($column['attributes']);
-                            $content .= '[fusion_builder_column' . $col_attrs . ']';
+    private function generate_row($row)
+    {
+        $columns = isset($row['columns']) ? $row['columns'] : array();
+        $render = function ($column) {
+            return $this->generate_column($column);
+        };
+        return $this->emit_node($row, 'fusion_builder_row', array(array($columns, $render)), function () use ($columns, $render) {
+            return implode('', array_map($render, $columns));
+        });
+    }
 
-                            // Generate regular elements
-                            if (isset($column['elements'])) {
-                                foreach ($column['elements'] as $element) {
-                                    $content .= $this->generate_element($element);
-                                }
-                            }
-
-                            // P1-2: Generate inner rows/columns
-                            if (!empty($column['inner_rows'])) {
-                                foreach ($column['inner_rows'] as $inner_row) {
-                                    $ir_attrs = $this->build_attributes($inner_row['attributes']);
-                                    $content .= '[fusion_builder_row_inner' . $ir_attrs . ']';
-
-                                    if (!empty($inner_row['inner_columns'])) {
-                                        foreach ($inner_row['inner_columns'] as $inner_col) {
-                                            $ic_attrs = $this->build_attributes($inner_col['attributes']);
-                                            $content .= '[fusion_builder_column_inner' . $ic_attrs . ']';
-
-                                            if (!empty($inner_col['elements'])) {
-                                                foreach ($inner_col['elements'] as $element) {
-                                                    $content .= $this->generate_element($element);
-                                                }
-                                            }
-
-                                            $content .= '[/fusion_builder_column_inner]';
-                                        }
-                                    }
-
-                                    $content .= '[/fusion_builder_row_inner]';
-                                }
-                            }
-
-                            $content .= '[/fusion_builder_column]';
-                        }
-                    }
-
-                    $content .= '[/fusion_builder_row]';
-                }
+    private function generate_column($column)
+    {
+        $elements = isset($column['elements']) ? $column['elements'] : array();
+        $inner_rows = !empty($column['inner_rows']) ? $column['inner_rows'] : array();
+        $render_element = function ($element) {
+            return $this->generate_element($element);
+        };
+        $render_inner_row = function ($inner_row) {
+            return $this->generate_inner_row($inner_row);
+        };
+        return $this->emit_node(
+            $column,
+            'fusion_builder_column',
+            array(array($elements, $render_element), array($inner_rows, $render_inner_row)),
+            function () use ($elements, $inner_rows, $render_element, $render_inner_row) {
+                // Structural edits cannot keep the original interleaving; elements first, then inner rows.
+                return implode('', array_map($render_element, $elements)) . implode('', array_map($render_inner_row, $inner_rows));
             }
+        );
+    }
 
-            $content .= '[/fusion_builder_container]';
+    private function generate_inner_row($inner_row)
+    {
+        $inner_columns = !empty($inner_row['inner_columns']) ? $inner_row['inner_columns'] : array();
+        $render = function ($inner_column) {
+            $elements = !empty($inner_column['elements']) ? $inner_column['elements'] : array();
+            $render_element = function ($element) {
+                return $this->generate_element($element);
+            };
+            return $this->emit_node($inner_column, 'fusion_builder_column_inner', array(array($elements, $render_element)), function () use ($elements, $render_element) {
+                return implode('', array_map($render_element, $elements));
+            });
+        };
+        return $this->emit_node($inner_row, 'fusion_builder_row_inner', array(array($inner_columns, $render)), function () use ($inner_columns, $render) {
+            return implode('', array_map($render, $inner_columns));
+        });
+    }
+
+    /**
+     * Emit a layout node: verbatim when untouched, otherwise its original text with
+     * only the changed children replaced, falling back to a full rebuild.
+     */
+    private function emit_node(array $node, $tag, array $child_lists, callable $rebuild)
+    {
+        if ($this->is_pristine($node)) {
+            return $node['_raw'];
         }
 
-        return $content;
+        $inner = $this->splice($node, $child_lists);
+        if (null === $inner) {
+            $inner = $rebuild();
+        }
+
+        $attributes = isset($node['attributes']) ? $node['attributes'] : array();
+        $open = (isset($node['_open'], $node['_attrs_hash']) && md5(serialize($attributes)) === $node['_attrs_hash'])
+            ? $node['_open']
+            : '[' . $tag . $this->build_attributes($attributes) . ']';
+
+        return $open . $inner . '[/' . $tag . ']';
+    }
+
+    /**
+     * Rebuild a node's inner text by replacing each child's original text in place.
+     *
+     * Returns null when that is not safe: a child is new, was moved, reordered,
+     * duplicated or deleted, or its original text is ambiguous.
+     *
+     * @param array $node        Parsed node carrying _raw_inner and _n.
+     * @param array $child_lists List of array(children, render callback).
+     * @return string|null
+     */
+    private function splice(array $node, array $child_lists)
+    {
+        if (!isset($node['_raw_inner'], $node['_n'])) {
+            return null;
+        }
+
+        $raw = $node['_raw_inner'];
+        $items = array();
+        foreach ($child_lists as $list) {
+            list($children, $render) = $list;
+            $last = -1;
+            foreach ($children as $child) {
+                if (empty($child['_raw']) || 1 !== substr_count($raw, $child['_raw'])) {
+                    return null;
+                }
+                $at = strpos($raw, $child['_raw']);
+                if ($at <= $last) {
+                    return null;
+                }
+                $last = $at;
+                $items[] = array($at, $child, $render);
+            }
+        }
+
+        if (count($items) !== (int) $node['_n']) {
+            return null;
+        }
+
+        usort($items, function ($a, $b) {
+            return $a[0] - $b[0];
+        });
+
+        $out = '';
+        $pos = 0;
+        foreach ($items as $item) {
+            list($at, $child, $render) = $item;
+            if ($at < $pos) {
+                return null;
+            }
+            $out .= substr($raw, $pos, $at - $pos) . $render($child);
+            $pos = $at + strlen($child['_raw']);
+        }
+
+        return $out . substr($raw, $pos);
+    }
+
+    /**
+     * Record a node's original text and fingerprint so generate() can reuse it.
+     */
+    private function seal(array $node, $tag, $attr_string, $inner, $child_count)
+    {
+        $node['_open'] = '[' . $tag . $attr_string . ']';
+        $node['_raw_inner'] = $inner;
+        $node['_raw'] = $node['_open'] . $inner . '[/' . $tag . ']';
+        $node['_attrs_hash'] = md5(serialize(isset($node['attributes']) ? $node['attributes'] : array()));
+        $node['_n'] = $child_count;
+        $node['_hash'] = $this->fingerprint($node);
+        return $node;
+    }
+
+    private function is_pristine($node)
+    {
+        return is_array($node) && isset($node['_raw'], $node['_hash']) && $this->fingerprint($node) === $node['_hash'];
+    }
+
+    /**
+     * Hash of a node's content, ignoring positional data and cached source text.
+     */
+    private function fingerprint($node)
+    {
+        return md5(serialize($this->semantic_view($node)));
+    }
+
+    private function semantic_view($node)
+    {
+        if (!is_array($node)) {
+            return $node;
+        }
+        $out = array();
+        foreach ($node as $key => $value) {
+            if (is_string($key) && ('' === $key || '_' === $key[0] || in_array($key, array('id', 'index', 'path', 'canonical_path', 'raw_content'), true))) {
+                continue;
+            }
+            $out[$key] = $this->semantic_view($value);
+        }
+        return $out;
+    }
+
+    /**
+     * Remove the private bookkeeping keys (_raw, _hash, ...) before returning a structure to clients.
+     */
+    public static function strip_private_keys($node)
+    {
+        if (!is_array($node)) {
+            return $node;
+        }
+        $out = array();
+        foreach ($node as $key => $value) {
+            if (is_string($key) && '' !== $key && '_' === $key[0] && '__passthrough__' !== $key) {
+                continue;
+            }
+            $out[$key] = self::strip_private_keys($value);
+        }
+        return $out;
     }
 
     /**
@@ -644,19 +832,28 @@ class MCP_Avada_Parser
      */
     private function generate_element($element)
     {
+        // Untouched elements are written back exactly as they were parsed.
+        if ($this->is_pristine($element)) {
+            return $element['_raw'];
+        }
+
         // P1-1: Passthrough elements are output as raw text (no parsing/modification)
         if ($element['type'] === '__passthrough__' && isset($element['raw_shortcode'])) {
             return $element['raw_shortcode'];
         }
 
         $type = $element['type'];
-        $attrs = $this->build_attributes($element['attributes']);
-        $element_content = isset($element['content']) ? $element['content'] : '';
+        $attrs = $this->build_attributes(isset($element['attributes']) ? $element['attributes'] : array());
+        $element_content = isset($element['content']) ? (string) $element['content'] : '';
 
-        if (!empty($element_content)) {
+        // Keep the original form. A dropped closing tag would let the element swallow the
+        // following content, so new elements and anything with content are always closed;
+        // known self-closing ones use the explicit "/]" form, which WordPress never pairs.
+        $closed = isset($element['_closed']) ? ($element['_closed'] || '' !== $element_content) : true;
+
+        if ($closed) {
             return '[' . $type . $attrs . ']' . $element_content . '[/' . $type . ']';
-        } else {
-            return '[' . $type . $attrs . ']';
         }
+        return '[' . $type . $attrs . ' /]';
     }
 }

@@ -67,15 +67,14 @@ class MCP_Avada_Pro_Rendered_CSS_Variable_Verifier implements MCP_Avada_Pro_Modu
             );
         }
 
-        $response = wp_remote_get($page_url, array('timeout' => 20));
-        if (is_wp_error($response)) {
+        $html = self::fetch_site_page($page_url);
+        if (is_wp_error($html)) {
             return array(
                 'success' => false,
-                'data' => array('error' => $response->get_error_message()),
+                'data' => array('error' => $html->get_error_message()),
             );
         }
 
-        $html = (string) wp_remote_retrieve_body($response);
         $report = self::analyze_html_by_class($html, $class_name);
         $report['page_url'] = $page_url;
 
@@ -83,6 +82,36 @@ class MCP_Avada_Pro_Rendered_CSS_Variable_Verifier implements MCP_Avada_Pro_Modu
             'success' => true,
             'data' => $report,
         );
+    }
+
+    /**
+     * Fetch rendered HTML for a URL on this site only.
+     *
+     * Restricting the host to home_url() prevents the ability from being used
+     * as an SSRF proxy (internal services, cloud metadata, port probing).
+     *
+     * @return string|WP_Error
+     */
+    public static function fetch_site_page(string $url)
+    {
+        $site_host = wp_parse_url(home_url(), PHP_URL_HOST);
+        $parts = wp_parse_url($url);
+
+        if (
+            empty($parts['host'])
+            || empty($parts['scheme'])
+            || !in_array(strtolower($parts['scheme']), array('http', 'https'), true)
+            || strtolower($parts['host']) !== strtolower((string) $site_host)
+        ) {
+            return new WP_Error('mcp_avada_pro_url_not_allowed', 'page_url must be a URL on this site (' . $site_host . ').');
+        }
+
+        $response = wp_safe_remote_get($url, array('timeout' => 20, 'redirection' => 3));
+        if (is_wp_error($response)) {
+            return new WP_Error('mcp_avada_pro_fetch_failed', 'Could not fetch page_url.');
+        }
+
+        return (string) wp_remote_retrieve_body($response);
     }
 
     public static function analyze_html_by_class(string $html, string $class_name): array

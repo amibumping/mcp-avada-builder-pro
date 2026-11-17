@@ -79,6 +79,21 @@ function mcp_avada_pro_get_default_column_attrs($user_attrs = array(), $is_first
 }
 
 /**
+ * Normalize the post type accepted by create-page.
+ *
+ * Only pages and posts are allowed: the permission check maps them to
+ * publish_pages / publish_posts, so any other type would bypass its own caps.
+ *
+ * @param mixed $post_type Raw post_type argument.
+ * @return string|null 'page', 'post', or null when not allowed.
+ */
+function mcp_avada_pro_creatable_post_type($post_type): ?string
+{
+    $post_type = is_string($post_type) ? sanitize_key($post_type) : '';
+    return in_array($post_type, array('page', 'post'), true) ? $post_type : null;
+}
+
+/**
  * Ensure required post meta is set for Avada Builder backend to work.
  * 
  * @param int $post_id Post ID
@@ -584,7 +599,10 @@ function mcp_avada_pro_register_abilities(): void
             'category' => 'avada-builder-pro',
             'execute_callback' => 'mcp_avada_pro_create_page',
             'permission_callback' => function ($params): bool {
-                $post_type = isset($params['post_type']) && 'post' === $params['post_type'] ? 'post' : 'page';
+                $post_type = mcp_avada_pro_creatable_post_type($params['post_type'] ?? 'page');
+                if (null === $post_type) {
+                    return false;
+                }
                 $cap = ('post' === $post_type) ? 'publish_posts' : 'publish_pages';
                 return current_user_can($cap);
             },
@@ -594,7 +612,7 @@ function mcp_avada_pro_register_abilities(): void
                     'title' => array('type' => 'string', 'description' => 'Page title'),
                     'status' => array('type' => 'string', 'default' => 'draft', 'description' => 'Post status: draft, publish, pending, private'),
                     'template' => array('type' => 'string', 'description' => 'Page template slug (e.g. "100-width.php" for full width)'),
-                    'post_type' => array('type' => 'string', 'default' => 'page', 'description' => 'Post type: page or post'),
+                    'post_type' => array('type' => 'string', 'enum' => array('page', 'post'), 'default' => 'page', 'description' => 'Post type: page or post'),
                 ),
                 'required' => array('title'),
             ),
@@ -2643,7 +2661,10 @@ function mcp_avada_pro_create_page(array $params)
 {
     $title = sanitize_text_field($params['title']);
     $status = isset($params['status']) ? sanitize_key($params['status']) : 'draft';
-    $post_type = isset($params['post_type']) ? sanitize_key($params['post_type']) : 'page';
+    $post_type = mcp_avada_pro_creatable_post_type($params['post_type'] ?? 'page');
+    if (null === $post_type) {
+        return new WP_Error('mcp_avada_pro_invalid_post_type', 'post_type must be "page" or "post".');
+    }
 
     $valid_statuses = array('draft', 'publish', 'pending', 'private');
     if (!in_array($status, $valid_statuses)) {

@@ -90,15 +90,14 @@ class MCP_Avada_Pro_Responsive_Drift_Debugger implements MCP_Avada_Pro_Module_In
             );
         }
 
-        $response = wp_remote_get($page_url, array('timeout' => 20));
-        if (is_wp_error($response)) {
+        $html = MCP_Avada_Pro_Rendered_CSS_Variable_Verifier::fetch_site_page($page_url);
+        if (is_wp_error($html)) {
             return array(
                 'success' => false,
-                'data' => array('error' => $response->get_error_message()),
+                'data' => array('error' => $html->get_error_message()),
             );
         }
 
-        $html = (string) wp_remote_retrieve_body($response);
         $rendered = MCP_Avada_Pro_Rendered_CSS_Variable_Verifier::analyze_html_by_class($html, $class_name);
 
         return array(

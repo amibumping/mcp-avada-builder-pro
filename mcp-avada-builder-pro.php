@@ -2250,13 +2250,15 @@ function mcp_avada_pro_validate_media_attributes($element_type, $attributes)
     if (in_array($element_type, $image_types, true)) {
         // Validate image_id if provided — must be a positive integer or empty string
         if (isset($attributes['image_id']) && $attributes['image_id'] !== '') {
-            $image_id = $attributes['image_id'];
-            if (!is_numeric($image_id) || (int) $image_id <= 0) {
+            // Avada stores either "123" or "123|size-slug" (e.g. "123|full", "123|fusion-600").
+            $image_id = (string) $attributes['image_id'];
+            if (!preg_match('/^([1-9][0-9]*)(\|[a-z0-9_-]+)?$/i', $image_id, $image_id_parts)) {
                 return new WP_Error(
                     'invalid_media_field',
-                    'image_id must be a positive integer or empty. Got: ' . $image_id
+                    'image_id must be an attachment ID, optionally with a size ("123" or "123|full"). Got: ' . $image_id
                 );
             }
+            $image_id = $image_id_parts[1];
             // Verify attachment exists in WordPress
             if (get_post_type((int) $image_id) !== 'attachment') {
                 return new WP_Error(

@@ -2340,6 +2340,76 @@ function mcp_avada_pro_element_dedupe_key(array $element)
 }
 
 /**
+ * Helper: Count opening and closing shortcode tags.
+ * A self-closing tag ("[tag /]" or "[tag/]") is complete on its own and is not
+ * counted as an opening tag.
+ *
+ * @param string $content Shortcode content.
+ * @return array{0: array<string,int>, 1: array<string,int>} Opening counts, closing counts.
+ */
+function mcp_avada_pro_shortcode_tag_counts($content)
+{
+    preg_match_all('/\[(\/?)([a-zA-Z_][a-zA-Z0-9_-]*)([^\]]*)\]/', (string) $content, $matches, PREG_SET_ORDER);
+
+    $open_counts = array();
+    $close_counts = array();
+    foreach ($matches as $m) {
+        $tag = $m[2];
+        if ('/' === $m[1]) {
+            $close_counts[$tag] = ($close_counts[$tag] ?? 0) + 1;
+        } elseif ('/' !== substr(rtrim($m[3]), -1)) {
+            $open_counts[$tag] = ($open_counts[$tag] ?? 0) + 1;
+        }
+    }
+    return array($open_counts, $close_counts);
+}
+
+/**
+ * Helper: Shortcode tags whose opening and closing counts differ.
+ * Tags Avada writes without a closing tag and without the "/" marker are exempt.
+ *
+ * @param string $content Shortcode content.
+ * @return array<string, array{opening:int, closing:int}>
+ */
+function mcp_avada_pro_shortcode_tag_balance($content)
+{
+    $self_closing_tags = array(
+        'fusion_image',
+        'fusion_separator',
+        'fusion_fontawesome',
+        'fusion_gallery',
+        'fusion_blog',
+        'fusion_portfolio',
+        'fusion_social_links',
+        'fusion_slider',
+        'fusion_post_slider',
+        'fusion_rev_slider',
+        'fusion_layerslider',
+        'fusion_modal_text_link',
+        'fusion_pricing_button',
+        'fusion_viewport',
+        'fusion_code_block',
+        'fusion_post_grid',
+        'fusion_portfolio_masonry',
+        'fusion_google_fonts',
+        'fusion_fusion_slider'
+    );
+
+    list($open_counts, $close_counts) = mcp_avada_pro_shortcode_tag_counts($content);
+    $imbalanced = array();
+    foreach ($open_counts as $tag => $ocount) {
+        if (in_array($tag, $self_closing_tags, true)) {
+            continue;
+        }
+        $ccount = $close_counts[$tag] ?? 0;
+        if ($ocount !== $ccount) {
+            $imbalanced[$tag] = array('opening' => $ocount, 'closing' => $ccount);
+        }
+    }
+    return $imbalanced;
+}
+
+/**
  * Helper: Validate a structure object before using it with replace-content.
  * Ensures the structure has valid containers/rows/columns hierarchy.
  *
@@ -4352,58 +4422,15 @@ function mcp_avada_pro_validate_page_structure(array $params)
     $warnings = array();
 
     // 1. Check shortcode tag balance (opening vs closing)
-    $tag_pattern = '/\[(\/?)([a-zA-Z_][a-zA-Z0-9_-]*)[\s\]]/';
-    preg_match_all($tag_pattern, $content, $tag_matches, PREG_SET_ORDER);
-
-    $open_counts = array();
-    $close_counts = array();
-    foreach ($tag_matches as $m) {
-        $is_close = $m[1] === '/';
-        $tag = $m[2];
-        if ($is_close) {
-            $close_counts[$tag] = ($close_counts[$tag] ?? 0) + 1;
-        } else {
-            $open_counts[$tag] = ($open_counts[$tag] ?? 0) + 1;
-        }
-    }
-
-    // Self-closing tags (no content) are expected to have no closing tags
-    $self_closing_tags = array(
-        'fusion_image',
-        'fusion_separator',
-        'fusion_fontawesome',
-        'fusion_gallery',
-        'fusion_blog',
-        'fusion_portfolio',
-        'fusion_social_links',
-        'fusion_slider',
-        'fusion_post_slider',
-        'fusion_rev_slider',
-        'fusion_layerslider',
-        'fusion_modal_text_link',
-        'fusion_pricing_button',
-        'fusion_viewport',
-        'fusion_code_block',
-        'fusion_post_grid',
-        'fusion_portfolio_masonry',
-        'fusion_google_fonts',
-        'fusion_fusion_slider'
-    );
-
-    foreach ($open_counts as $tag => $ocount) {
-        if (in_array($tag, $self_closing_tags, true)) {
-            continue;
-        }
-        $ccount = $close_counts[$tag] ?? 0;
-        if ($ocount !== $ccount) {
-            $issues[] = array(
-                'type' => 'tag_imbalance',
-                'tag' => $tag,
-                'opening' => $ocount,
-                'closing' => $ccount,
-                'severity' => 'error',
-            );
-        }
+    list($open_counts, $close_counts) = mcp_avada_pro_shortcode_tag_counts($content);
+    foreach (mcp_avada_pro_shortcode_tag_balance($content) as $tag => $counts) {
+        $issues[] = array(
+            'type' => 'tag_imbalance',
+            'tag' => $tag,
+            'opening' => $counts['opening'],
+            'closing' => $counts['closing'],
+            'severity' => 'error',
+        );
     }
 
     // 2. Check for orphaned closing tags (close without open)

@@ -22,7 +22,7 @@ and correctness fixes found while testing the plugin against a real Avada site
 (WordPress with Avada 7.16, Fusion Builder 3.16, official `WordPress/mcp-adapter`):
 
 - **Security:** page-fetching abilities only fetch URLs on the site itself (prevents SSRF), and `create-page` only accepts the `page` and `post` post types.
-- **Element registry:** loads Avada's live element registry instead of a fixed list, and stops parsing nested elements twice.
+- **Every Avada element:** reads Avada's live element registry, so `add-element` accepts every element Avada registers (142 on Avada 7.16) instead of only the 56 in the static list, with their real parameters (the original returned 0 parameters outside the editor). It also stops parsing nested elements twice.
 - **Lossless round-trip:** parsing a page and generating it again returns the same `post_content`, including after structural edits.
 - **list-pages:** uses Avada's real builder flag and hides posts the caller cannot edit.
 - **Media:** accepts Avada's `id|size` format for `image_id`.
@@ -39,7 +39,7 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 
 - **Recursive Shortcode Parser** - Handles deeply nested structures including inner rows/columns
 - **Full Hierarchy Support** - Container > Row > Column > Element (including inner rows/columns)
-- **56 Element Types** - Complete registry of Fusion Builder elements including `fusion_imageframe`
+- **Every Avada Element** - Reads Avada's live element registry (142 elements and 4,792 parameters on Avada 7.16), plus 56 curated element types with extra descriptions and validation
 - **Passthrough Preservation** - Unregistered element types preserved as raw shortcode (no data loss)
 - **Path-based Element Access** - Unique paths like `container_0/row_0/column_0/fusion_text_1`
 - **Media Field Validation** - Strict validation for image_id, image URLs, gallery IDs
@@ -63,7 +63,7 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 - `avada-pro/update-element` - Update element content/attributes by path.
 - `avada-pro/delete-element` - Delete element by path.
 - `avada-pro/replace-content` - Replace whole page content from structure object (with structural validation and backup).
-- `avada-pro/list-element-types` - List all static element types (56).
+- `avada-pro/list-element-types` - List the 56 curated element types. To browse every element in Avada's live registry, use `search-elements` or `list-element-categories`.
 - `avada-pro/clean-duplicates` - Remove duplicate elements in a page.
 
 ### Layout Operations
@@ -94,9 +94,22 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 
 ---
 
-## Supported Element Types (56 Total)
+## Supported Element Types
 
-### Layout Elements
+The plugin supports **every element registered in your Avada install**. It reads
+Avada's live element registry, so it picks up elements added by Avada updates or
+add-ons automatically, with no code changes. On Avada 7.16 that is 142 elements
+and 4,792 parameters.
+
+- `add-element`, `get-element-schema`, `get-element-defaults`, `search-elements`
+  and `list-element-categories` work with the full live registry.
+- The 56 element types below also have a curated entry with extra descriptions
+  and validation. All other elements use the parameter definitions that Avada
+  itself provides.
+
+### Curated Element Types (56)
+
+#### Layout Elements
 - `fusion_builder_container` - Main wrapper
 - `fusion_builder_row` - Row organizer
 - `fusion_builder_column` - Column layout
@@ -110,7 +123,7 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 - `fusion_modal_text_link` - Modal trigger link
 - `fusion_viewport` - Visibility control
 
-### Content Elements
+#### Content Elements
 - `fusion_text` - Text blocks
 - `fusion_title` - Headings (H1-H6)
 - `fusion_button` - Buttons with links
@@ -139,7 +152,7 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 - `fusion_pricing_button` - CTA buttons
 - `fusion_person` - Team profiles
 
-### Media Elements
+#### Media Elements
 - `fusion_image` - Images
 - `fusion_imageframe` - Image frames with styling and effects
 - `fusion_images` - Image carousel
@@ -155,12 +168,12 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 - `fusion_fusion_slider` - Fusion Slider
 - `fusion_post_grid` - Post grids
 
-### Typography Elements
+#### Typography Elements
 - `fusion_google_fonts` - Font imports
 - `fusion_highlight` - Text highlighting
 - `fusion_dropcap` - Large first letters
 
-### Social Elements
+#### Social Elements
 - `fusion_social_links` - Social icons
 
 ---

@@ -37,7 +37,7 @@ Use this skill when you need to:
 
 - WordPress site with Avada Theme (7.x) and Fusion Builder
 - MCP Avada Builder Pro plugin installed and active (v3.2.0+)
-- Abilities API plugin installed and active
+- WordPress 6.9+ (Abilities API is in core) and the official [MCP Adapter](https://github.com/WordPress/mcp-adapter) plugin for MCP access
 - User must have `edit_posts` capability (read) or `edit_post` for specific pages (write)
 
 ## Available Abilities (23)

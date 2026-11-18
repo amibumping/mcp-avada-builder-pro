@@ -26,6 +26,7 @@ and correctness fixes found while testing the plugin against a real Avada site
 - **Lossless round-trip:** parsing a page and generating it again returns the same `post_content`, including after structural edits.
 - **list-pages:** uses Avada's real builder flag and hides posts the caller cannot edit.
 - **Media:** accepts Avada's `id|size` format for `image_id`.
+- **Setup:** works with the Abilities API built into WordPress 6.9+ and the official `WordPress/mcp-adapter` plugin; no forked dependency plugins are needed. The setup guide below explains every step.
 - **Validation:** `add-element` rejects layout tags early, duplicate detection tells passthrough elements apart, and self-closing shortcodes count as balanced.
 
 The original license (GPL-2.0-or-later) and copyright are unchanged.
@@ -197,67 +198,111 @@ After write operations, a `canonical_path` is returned that reflects the actual 
 
 ## Requirements
 
-- WordPress 5.8+
-- Avada Theme 7.0+
-- Avada Builder Plugin 3.0+
-- Abilities API Plugin
+| Component | Version | Notes |
+|---|---|---|
+| WordPress | 6.9+ | The Abilities API is built into WordPress core since 6.9. **No Abilities API plugin is needed.** |
+| PHP | 7.4+ | |
+| Avada theme | 7.0+ | Tested with Avada 7.16.4. |
+| Avada Builder (Fusion Builder) + Fusion Core | 3.0+ | Tested with Avada Builder 3.16.4. |
+| [MCP Adapter](https://github.com/WordPress/mcp-adapter) | 0.7+ | The **official** WordPress plugin that turns abilities into MCP tools. Tested with 0.7.1. |
 
-## Prerequisites & MCP Adapter Setup
+> **Upgrading from the original setup?** The original instructions used forked
+> `abilities-api` and `mcp-adapter` plugins. On WordPress 6.9+ you do not need
+> them: deactivate and delete the `abilities-api` plugin, and replace the forked
+> `mcp-adapter` with the official one.
 
-To use MCP Avada Builder Pro with AI agents or external automation, you must have:
+## Setup
 
-- **WordPress MCP Adapter Plugin** ([mcp-adapter](https://github.com/wikiwyrhead/mcp-adapter))
-- **Abilities API Plugin** ([abilities-api](https://github.com/wikiwyrhead/abilities-api))
-- **Avada Theme** (7.0+)
-- **Avada Builder Plugin** (3.0+)
+### 1. Install the MCP Adapter
 
-### 1. Install Required Plugins
+1. Open https://github.com/WordPress/mcp-adapter/releases and download `mcp-adapter.zip` from the **Assets** of the latest release.
+2. In WordPress, go to **Plugins → Add New Plugin → Upload Plugin**, choose the zip and click **Install Now**.
+3. Click **Activate**.
 
-1. **Abilities API**
-	- Download from [abilities-api GitHub](https://github.com/wikiwyrhead/abilities-api)
-	- Upload to `wp-content/plugins/` and activate
+### 2. Install this plugin
 
-2. **MCP Adapter**
-	- Download from [mcp-adapter GitHub](https://github.com/wikiwyrhead/mcp-adapter)
-	- Upload to `wp-content/plugins/` and activate
+1. On this repository's GitHub page, click **Code → Download ZIP**.
+2. Upload it the same way (**Plugins → Add New Plugin → Upload Plugin**) and activate it.
 
-3. **Avada Theme & Builder**
-	- Install via ThemeForest or your preferred method
-	- Activate both theme and builder plugin
+The abilities register automatically. There is nothing to configure.
 
-4. **MCP Avada Builder Pro** (this plugin)
-	- Upload to `wp-content/plugins/` and activate
+### 3. Create an Application Password
 
-### 2. Verify Abilities Exposure
+The AI agent signs in to WordPress as a real user, using an Application Password
+(a separate password you can revoke at any time without touching the real one).
 
-After activation, MCP Avada Builder Pro abilities are exposed via:
+1. Use a user that can edit pages (**Editor** or **Administrator**). A dedicated user just for the agent is recommended.
+2. Go to **Users → Profile**, scroll to **Application Passwords**, type a name (for example `mcp-agent`) and click **Add New Application Password**.
+3. Copy the password now. WordPress shows it only once.
 
-- **WordPress REST API:**
-  - `GET /wp-json/wp-abilities/v1/abilities` (list abilities)
-  - `POST /wp-json/wp-abilities/v1/abilities/{id}/invoke` (run ability)
-- **MCP Adapter:**
-  - `GET /wp-json/mcp/mcp-adapter-default-server` (MCP tools discovery)
+> WordPress only offers Application Passwords on sites served over **HTTPS**,
+> or on local sites with `define( 'WP_ENVIRONMENT_TYPE', 'local' );` in `wp-config.php`.
 
-To test:
+### 4. Check that it works
+
+Replace the site, user and password with your own:
 
 ```bash
-curl http://your-site.local/wp-json/wp-abilities/v1/abilities | jq '.[] | select(.meta.mcp.public == true)'
+curl -u "USER:APPLICATION PASSWORD" "https://your-site.com/wp-json/wp-abilities/v1/abilities?per_page=100"
 ```
 
-You should see all `avada-pro/*` abilities listed and callable.
+The response must include abilities whose name starts with `avada-pro/`.
 
-### 3. AI Agent/Automation Setup
+### 5. Connect your AI agent
 
-Configure your MCP client (e.g. @automattic/mcp-wordpress-remote) with your WordPress API URL, username, and password. See `.mcp.json` for example config.
+The MCP server lives at:
 
+```
+https://your-site.com/wp-json/mcp/mcp-adapter-default-server
+```
 
----
+It uses the **Streamable HTTP** transport with HTTP Basic authentication. The
+header value is `Basic ` followed by `USER:APPLICATION PASSWORD` encoded in Base64.
+To get the Base64 text:
 
-## Installation
+```powershell
+# Windows PowerShell
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("USER:APPLICATION PASSWORD"))
+```
 
-1. Upload plugin to `wp-content/plugins/`
-2. Activate through WordPress admin
-3. Abilities will be automatically registered
+```bash
+# macOS / Linux
+printf '%s' 'USER:APPLICATION PASSWORD' | base64
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add --transport http avada https://your-site.com/wp-json/mcp/mcp-adapter-default-server --header "Authorization: Basic BASE64_TEXT"
+```
+
+**Other clients** that support Streamable HTTP with custom headers (JSON config):
+
+```json
+{
+  "mcpServers": {
+    "avada": {
+      "type": "http",
+      "url": "https://your-site.com/wp-json/mcp/mcp-adapter-default-server",
+      "headers": { "Authorization": "Basic BASE64_TEXT" }
+    }
+  }
+}
+```
+
+The default MCP Adapter server exposes three tools: `mcp-adapter-discover-abilities`,
+`mcp-adapter-get-ability-info` and `mcp-adapter-execute-ability`. The agent uses
+them to find the `avada-pro/*` abilities and run them.
+
+> **Security:** an Application Password acts as that user. Keep it out of shared
+> files and repositories, and revoke it in **Users → Profile** when you no longer need it.
+
+### REST API (without MCP)
+
+The abilities can also be called directly through the WordPress core REST API:
+
+- `GET /wp-json/wp-abilities/v1/abilities` — list abilities
+- `GET|POST /wp-json/wp-abilities/v1/abilities/avada-pro/{ability}/run` — run an ability (POST body: `{"input": {...}}`)
 
 ---
 

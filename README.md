@@ -14,6 +14,24 @@ Advanced MCP integration for Avada Fusion Builder with full shortcode parsing an
 
 ---
 
+## About This Fork
+
+This is a fork of [wikiwyrhead/mcp-avada-builder-pro](https://github.com/wikiwyrhead/mcp-avada-builder-pro).
+All credit for the original plugin goes to its author. This fork adds security
+and correctness fixes found while testing the plugin against a real Avada site
+(WordPress with Avada 7.16, Fusion Builder 3.16, official `WordPress/mcp-adapter`):
+
+- **Security:** page-fetching abilities only fetch URLs on the site itself (prevents SSRF), and `create-page` only accepts the `page` and `post` post types.
+- **Element registry:** loads Avada's live element registry instead of a fixed list, and stops parsing nested elements twice.
+- **Lossless round-trip:** parsing a page and generating it again returns the same `post_content`, including after structural edits.
+- **list-pages:** uses Avada's real builder flag and hides posts the caller cannot edit.
+- **Media:** accepts Avada's `id|size` format for `image_id`.
+- **Validation:** `add-element` rejects layout tags early, duplicate detection tells passthrough elements apart, and self-closing shortcodes count as balanced.
+
+The original license (GPL-2.0-or-later) and copyright are unchanged.
+
+---
+
 ## Overview
 
 MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fusion Builder programmatically via the WordPress Abilities API and MCP protocol. Features:

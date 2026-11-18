@@ -1514,7 +1514,7 @@ function mcp_avada_pro_add_container(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -1625,7 +1625,7 @@ function mcp_avada_pro_add_element(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -1736,7 +1736,7 @@ function mcp_avada_pro_update_element(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -1820,7 +1820,7 @@ function mcp_avada_pro_delete_element(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -1888,7 +1888,7 @@ function mcp_avada_pro_replace_content(array $params)
     );
     update_post_meta($post_id, '_fusion_builder_pre_replace_backup', $backup_meta);
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -1961,7 +1961,7 @@ function mcp_avada_pro_clean_duplicates(array $params)
 
     $content = $parser->generate($structure);
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -2137,7 +2137,7 @@ function mcp_avada_pro_restructure_layout(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -2809,7 +2809,7 @@ function mcp_avada_pro_create_page(array $params)
         'post_content' => $content,
     );
 
-    $post_id = wp_insert_post($post_data, true);
+    $post_id = mcp_avada_pro_guarded_insert_post($post_data, true);
     if (is_wp_error($post_id)) {
         return $post_id;
     }
@@ -2968,7 +2968,7 @@ function mcp_avada_pro_duplicate_element(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3075,7 +3075,7 @@ function mcp_avada_pro_move_element(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3304,7 +3304,7 @@ function mcp_avada_pro_bulk_update(array $params)
         return new WP_Error('avada_pro_data_loss', 'Cannot proceed: ' . $validation['error'], array('status' => 409));
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3442,7 +3442,7 @@ function mcp_avada_pro_bulk_update_columns(array $params)
         );
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3578,7 +3578,7 @@ function mcp_avada_pro_clone_column_style(array $params)
         );
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3766,7 +3766,7 @@ function mcp_avada_pro_clone_element_style(array $params)
         );
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -3905,7 +3905,7 @@ function mcp_avada_pro_enforce_responsive_policy(array $params)
         );
     }
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $content,
     ), true);
@@ -4330,6 +4330,139 @@ function mcp_avada_pro_search_elements(array $params)
 }
 
 // =========================================================================
+// INLINE STYLE GUARD
+// Writes must not put inline styles on text/title blocks when the element has
+// a dedicated option for that property: the option would then be silently
+// overridden and editing the element in the builder would have no effect.
+// =========================================================================
+
+/**
+ * CSS properties that fusion_text / fusion_title expose as element options.
+ *
+ * @param string $element 'fusion_text' or 'fusion_title'.
+ * @return array<string,string> CSS property => option name.
+ */
+function mcp_avada_pro_dedicated_style_options($element)
+{
+    $font = 'fusion_title' === $element ? 'title_font' : 'text_font';
+    return array(
+        'color'          => 'text_color',
+        'font-size'      => 'font_size',
+        'line-height'    => 'line_height',
+        'letter-spacing' => 'letter_spacing',
+        'text-transform' => 'text_transform',
+        'font-weight'    => 'fusion_font_family_' . $font . ' + fusion_font_variant_' . $font,
+        'text-align'     => 'fusion_title' === $element ? 'content_align' : 'content_alignment',
+        'margin'         => 'margin_top/margin_bottom',
+        'margin-top'     => 'margin_top',
+        'margin-bottom'  => 'margin_bottom',
+    );
+}
+
+/**
+ * Find block-level inline styles that duplicate element options.
+ *
+ * A violation is a <p>/<hN> inside fusion_text or fusion_title, or a wrapper
+ * (span/strong) holding the whole fusion_title, whose style sets a property in
+ * mcp_avada_pro_dedicated_style_options(). Partial highlights inside a paragraph
+ * and properties without an option (position, padding, display...) are allowed.
+ *
+ * @param string $content post_content.
+ * @return array<int,array{signature:string,element:string,options:array}>
+ */
+function mcp_avada_pro_inline_style_violations($content)
+{
+    $found = array();
+    if (!is_string($content) || false === strpos($content, 'style=')) {
+        return $found;
+    }
+    preg_match_all('/\[(fusion_text|fusion_title)\b[^\]]*\](.*?)\[\/\1\]/s', $content, $elements, PREG_SET_ORDER);
+    foreach ($elements as $el) {
+        $tags = array();
+        preg_match_all('/<(?:p|h[1-6])\b[^>]*\sstyle="[^"]*"[^>]*>/i', $el[2], $blocks);
+        $tags = $blocks[0];
+        if ('fusion_title' === $el[1] && preg_match('/^\s*(<(span|strong)\b[^>]*\sstyle="[^"]*"[^>]*>)(.*)<\/\2>\s*$/s', $el[2], $w) && false === stripos($w[3], '<' . $w[2])) {
+            $tags[] = $w[1];
+        }
+        $map = mcp_avada_pro_dedicated_style_options($el[1]);
+        foreach ($tags as $tag) {
+            preg_match('/\sstyle="([^"]*)"/', $tag, $s);
+            $options = array();
+            foreach (explode(';', html_entity_decode($s[1], ENT_QUOTES)) as $decl) {
+                $prop = strtolower(trim(strstr($decl, ':', true) ?: ''));
+                if (isset($map[$prop])) {
+                    $options[$map[$prop]] = true;
+                }
+            }
+            if ($options) {
+                $found[] = array('signature' => $el[1] . '|' . $tag, 'element' => $el[1], 'tag' => $tag, 'options' => array_keys($options));
+            }
+        }
+    }
+    return $found;
+}
+
+/**
+ * Refuse content that adds new inline-style violations (existing ones are tolerated
+ * so legacy pages stay editable).
+ *
+ * @return WP_Error|null
+ */
+function mcp_avada_pro_check_inline_styles($old_content, $new_content)
+{
+    $old = array_count_values(array_column(mcp_avada_pro_inline_style_violations((string) $old_content), 'signature'));
+    $new = array();
+    foreach (mcp_avada_pro_inline_style_violations((string) $new_content) as $v) {
+        $sig = $v['signature'];
+        if (!empty($old[$sig])) {
+            $old[$sig]--;
+            continue;
+        }
+        $new[] = $v;
+    }
+    if (!$new) {
+        return null;
+    }
+    $lines = array();
+    foreach (array_slice($new, 0, 5) as $v) {
+        $lines[] = $v['element'] . ' ' . $v['tag'] . ' -> set ' . implode(', ', $v['options']) . ' on the element';
+    }
+    return new WP_Error(
+        'avada_pro_inline_style',
+        'Inline styles duplicate dedicated Avada element options; move them to the element (one fusion_text per styled paragraph, fusion_title for headings): '
+            . implode('; ', $lines)
+            . (count($new) > 5 ? '; (+' . (count($new) - 5) . ' more)' : '')
+            . '. Allowed inline: properties without an option (position, padding, display, gap...) and partial highlights inside a paragraph.',
+        array('status' => 422, 'violations' => array_slice($new, 0, 20))
+    );
+}
+
+/** wp_update_post() that enforces the inline style guard on post_content. */
+function mcp_avada_pro_guarded_update_post($postarr, $wp_error = true)
+{
+    if (isset($postarr['post_content'], $postarr['ID'])) {
+        $current = get_post((int) $postarr['ID']);
+        $error   = mcp_avada_pro_check_inline_styles($current ? $current->post_content : '', $postarr['post_content']);
+        if ($error) {
+            return $error;
+        }
+    }
+    return wp_update_post($postarr, $wp_error);
+}
+
+/** wp_insert_post() that enforces the inline style guard on post_content. */
+function mcp_avada_pro_guarded_insert_post($postarr, $wp_error = true)
+{
+    if (isset($postarr['post_content'])) {
+        $error = mcp_avada_pro_check_inline_styles('', $postarr['post_content']);
+        if ($error) {
+            return $error;
+        }
+    }
+    return wp_insert_post($postarr, $wp_error);
+}
+
+// =========================================================================
 // P1-3: DRY-RUN VALIDATION HELPER
 // Validates that a parse→generate cycle does not silently lose elements.
 // =========================================================================
@@ -4625,7 +4758,7 @@ function mcp_avada_pro_repair_shortcode_tree(array $params)
         'user_id' => get_current_user_id(),
     ));
 
-    $result = wp_update_post(array(
+    $result = mcp_avada_pro_guarded_update_post(array(
         'ID' => $post_id,
         'post_content' => $repaired_content,
     ), true);

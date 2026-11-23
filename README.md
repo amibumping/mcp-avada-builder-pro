@@ -29,6 +29,7 @@ and correctness fixes found while testing the plugin against a real Avada site
 - **Setup:** works with the Abilities API built into WordPress 6.9+ and the official `WordPress/mcp-adapter` plugin; no forked dependency plugins are needed. The setup guide below explains every step.
 - **Validation:** `add-element` rejects layout tags early, duplicate detection tells passthrough elements apart, and self-closing shortcodes count as balanced.
 - **Version-aware attributes:** `add-element`, `update-element` and `bulk-update` refuse attributes the installed Avada version does not define for the element (Avada would silently drop them), so options from a newer Avada are not written to an older site. Pass `allow_unknown_attributes: true` to override.
+- **Install-aware elements:** `add-element` and `replace-content` refuse element types that are disabled or not registered in the site's Avada install (Avada would print them as plain text). Element types already on the page are left untouched. `list-element-types` reports whether each element is available on the site and where to enable it, and the administrator-only `enable-element` switches it on after an explicit `confirm: true`.
 
 The original license (GPL-2.0-or-later) and copyright are unchanged.
 
@@ -53,7 +54,7 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 
 ---
 
-## Abilities (28 Total)
+## Abilities (29 Total)
 
 ### Core Page + Element Management
 - `avada-pro/get-info` - Get builder/theme/plugin versions and element count.
@@ -64,7 +65,8 @@ MCP Avada Builder Pro provides comprehensive abilities for controlling Avada Fus
 - `avada-pro/update-element` - Update element content/attributes by path.
 - `avada-pro/delete-element` - Delete element by path.
 - `avada-pro/replace-content` - Replace whole page content from structure object (with structural validation and backup).
-- `avada-pro/list-element-types` - List the 56 curated element types. To browse every element in Avada's live registry, use `search-elements` or `list-element-categories`.
+- `avada-pro/list-element-types` - List the 56 curated element types. To browse every element in Avada's live registry, use `search-elements` or `list-element-categories`. Each element reports `available` on this site.
+- `avada-pro/enable-element` - Enable an element disabled on this site (theme feature or builder element). Administrators only; without `confirm: true` it only lists the setting changes.
 - `avada-pro/clean-duplicates` - Remove duplicate elements in a page.
 
 ### Layout Operations

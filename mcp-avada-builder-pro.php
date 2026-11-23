@@ -473,6 +473,46 @@ function mcp_avada_pro_register_abilities(): void
     );
 
     wp_register_ability(
+        'avada-pro/enable-element',
+        array(
+            'label' => __('Enable Element on Site (Pro)', 'mcp-avada-builder-pro'),
+            'description' => __('Enable an Avada element that is disabled on this site (theme feature such as Avada FAQs / Avada Slider, or builder element). Without confirm=true it only returns the setting changes; ask the user to confirm them before calling again with confirm=true.', 'mcp-avada-builder-pro'),
+            'category' => 'avada-builder-pro',
+            'execute_callback' => 'mcp_avada_pro_enable_element',
+            'permission_callback' => function (): bool {
+                return current_user_can('manage_options');
+            },
+            'input_schema' => array(
+                'type' => 'object',
+                'properties' => array(
+                    'element_type' => array('type' => 'string', 'description' => 'Element shortcode tag, e.g. fusion_faq.'),
+                    'confirm' => array('type' => 'boolean', 'default' => false, 'description' => 'Apply the changes. Only after the user has confirmed them.'),
+                ),
+                'required' => array('element_type'),
+            ),
+            'output_schema' => array(
+                'type' => 'object',
+                'properties' => array(
+                    'success' => array('type' => 'boolean'),
+                    'data' => array('type' => 'object'),
+                ),
+            ),
+            'meta' => array(
+                'show_in_rest' => true,
+                'mcp' => array(
+                    'public' => true,
+                    'type' => 'tool',
+                ),
+                'annotations' => array(
+                    'readonly' => false,
+                    'destructive' => false,
+                    'idempotent' => true,
+                ),
+            ),
+        )
+    );
+
+    wp_register_ability(
         'avada-pro/list-element-types',
         array(
             'label' => __('List Element Types (Pro)', 'mcp-avada-builder-pro'),
@@ -1332,6 +1372,7 @@ function mcp_avada_pro_register_mcp_server($adapter): void
         'avada-pro/delete-element',
         'avada-pro/replace-content',
         'avada-pro/list-element-types',
+        'avada-pro/enable-element',
         'avada-pro/clean-duplicates',
         'avada-pro/restructure-layout',
         'avada-pro/create-page',
@@ -1870,6 +1911,16 @@ function mcp_avada_pro_replace_content(array $params)
     // Never trust private source keys from the client; re-attach them from the stored
     // content so untouched containers/elements are written back verbatim.
     $parser = new MCP_Avada_Parser();
+
+    // Element types introduced by this structure must exist in this Avada install.
+    // Types already on the page are left alone so legacy content stays editable.
+    $existing_types = mcp_avada_pro_collect_element_types($parser->parse($post->post_content, true));
+    foreach (array_diff(mcp_avada_pro_collect_element_types($structure), $existing_types) as $new_type) {
+        $type_validation = mcp_avada_pro_validate_element_type($new_type);
+        if (is_wp_error($type_validation)) {
+            return $type_validation;
+        }
+    }
     $structure = $parser->graft(MCP_Avada_Parser::strip_private_keys($structure), $parser->parse($post->post_content, true));
     $content = $parser->generate($structure);
 
@@ -1933,9 +1984,21 @@ function mcp_avada_pro_replace_content(array $params)
 function mcp_avada_pro_list_element_types(): array
 {
     $elements = new MCP_Avada_Elements();
+    $list = array();
+    foreach ($elements->get_all() as $element) {
+        if (is_array($element) && isset($element['type']) && 0 !== strpos($element['type'], 'fusion_builder_')) {
+            $availability = mcp_avada_pro_element_availability($element['type']);
+            $element['available'] = $availability['available'];
+            if (!$availability['available']) {
+                $element['enable_hint'] = $availability['enable_hint'];
+                $element['enableable'] = !empty($availability['blockers']);
+            }
+        }
+        $list[] = $element;
+    }
     return array(
         'success' => true,
-        'data' => $elements->get_all(),
+        'data' => $list,
     );
 }
 
@@ -2175,7 +2238,8 @@ function mcp_avada_pro_restructure_layout(array $params)
 // =========================================================================
 
 /**
- * Helper: Validate element type against static registry.
+ * Helper: Validate element type against the installed Avada (live registry and
+ * enabled elements), falling back to the static registry when the live one is unavailable.
  * Returns bool true if valid, WP_Error if invalid.
  * 
  * @param string $element_type
@@ -2194,20 +2258,243 @@ function mcp_avada_pro_validate_element_type($element_type)
         return new WP_Error('element_type_is_layout', 'Element type ' . sanitize_key($element_type) . ' is a layout tag, not an element. Use add-container for layout.');
     }
 
-    $registry = new MCP_Avada_Elements();
-    $element = $registry->get_by_type($element_type);
+    // Each install enables its own set of elements; a disabled element is not
+    // registered, so Avada would print its shortcode as plain text.
+    $availability = mcp_avada_pro_element_availability($element_type);
+    if ($availability['available']) {
+        return true;
+    }
+    if (!empty($availability['blockers'])) {
+        return new WP_Error(
+            'element_type_disabled',
+            'Element type ' . $element_type . ' is disabled in this Avada install. ' . $availability['enable_hint']
+                . ' Tell the user before building with it; an administrator can enable it with avada-pro/enable-element after the user confirms.',
+            array('element_type' => $element_type, 'blockers' => $availability['blockers'])
+        );
+    }
+    return new WP_Error(
+        'element_type_not_registered',
+        'Element type ' . $element_type . ' is not an element of this Avada install. Check avada-pro/list-element-types.',
+        array('element_type' => $element_type)
+    );
+}
 
-    // Fall back to Fusion Builder's live registry (all ~140 elements, not only the 56 static ones).
-    if (!$element) {
-        $runtime = mcp_avada_pro_get_runtime_elements();
-        $element = is_array($runtime) && isset($runtime[$element_type]);
+/**
+ * Helper: Avada theme feature (Global Options > Advanced > Post Types) an element depends on.
+ *
+ * @param string $element_type
+ * @return array|null array('setting' => option key, 'label' => option label) or null.
+ */
+function mcp_avada_pro_element_theme_feature($element_type)
+{
+    $features = array(
+        'fusion_fusionslider' => array('setting' => 'status_fusion_slider', 'label' => 'Avada Slider'),
+        'fusion_portfolio' => array('setting' => 'status_fusion_portfolio', 'label' => 'Avada Portfolio'),
+        'fusion_faq' => array('setting' => 'status_fusion_faqs', 'label' => 'Avada FAQs'),
+    );
+    if (isset($features[$element_type])) {
+        return $features[$element_type];
+    }
+    if ('fusion_form' === $element_type || 0 === strpos($element_type, 'fusion_form_')) {
+        return array('setting' => 'status_fusion_forms', 'label' => 'Avada Forms');
+    }
+    return null;
+}
+
+/**
+ * Helper: Name of the option that stores Avada Global Options (language aware).
+ *
+ * @return string
+ */
+function mcp_avada_pro_fusion_options_name()
+{
+    return class_exists('Fusion_Settings') ? Fusion_Settings::get_option_name() : 'fusion_options';
+}
+
+/**
+ * Helper: Whether an element can be used on this Avada install, and what blocks it.
+ *
+ * Blockers are settings an administrator can switch on (theme feature or builder
+ * element). An element with no blockers that Avada still does not register is not
+ * part of this install and cannot be enabled.
+ *
+ * @param string $element_type
+ * @return array{available: bool, blockers: array, enable_hint: string}
+ */
+function mcp_avada_pro_element_availability($element_type)
+{
+    $element_type = sanitize_key((string) $element_type);
+    $blockers = array();
+
+    // The live registry is authoritative when available. It keeps elements disabled in
+    // Builder Options (only their shortcode is not registered) but drops elements whose
+    // theme feature is off. Fall back to the static list when it is not loaded.
+    $runtime = mcp_avada_pro_get_runtime_elements();
+    if (is_array($runtime)) {
+        $known = isset($runtime[$element_type]);
+    } else {
+        $registry = new MCP_Avada_Elements();
+        $known = (bool) $registry->get_by_type($element_type);
     }
 
-    if (!$element) {
-        return new WP_Error('element_type_not_registered', 'Element type not found in registry: ' . sanitize_key($element_type));
+    $feature = mcp_avada_pro_element_theme_feature($element_type);
+    if ($feature) {
+        $option_name = mcp_avada_pro_fusion_options_name();
+        $options = get_option($option_name, array());
+        $value = is_array($options) && array_key_exists($feature['setting'], $options) ? $options[$feature['setting']] : '1';
+        // Avada drops Slider/Portfolio/FAQs on any empty value, but Forms only on '0'.
+        $off = 'status_fusion_forms' === $feature['setting'] ? '0' === (string) $value : empty($value);
+        if ($off) {
+            $blockers[] = array(
+                'kind' => 'theme_feature',
+                'option' => $option_name,
+                'setting' => $feature['setting'],
+                'label' => $feature['label'],
+                'location' => 'Avada > Options > Advanced > Post Types',
+            );
+        }
     }
 
-    return true;
+    // Child elements hidden from the builder are never in Avada's enabled list;
+    // they follow their parent element.
+    $is_child = is_array($runtime) && !empty($runtime[$element_type]['hide_from_builder']);
+    if (($known || $feature) && !$is_child && function_exists('fusion_is_element_enabled') && !fusion_is_element_enabled($element_type)) {
+        $blockers[] = array(
+            'kind' => 'builder_element',
+            'option' => 'fusion_builder_settings',
+            'setting' => 'fusion_elements',
+            'label' => $element_type,
+            'location' => 'Avada > Builder Options > Elements',
+        );
+    }
+
+    if (!empty($blockers)) {
+        $hints = array();
+        foreach ($blockers as $blocker) {
+            $hints[] = 'theme_feature' === $blocker['kind']
+                ? 'Enable "' . $blocker['label'] . '" in ' . $blocker['location'] . '.'
+                : 'Enable the element in ' . $blocker['location'] . '.';
+        }
+        return array('available' => false, 'blockers' => $blockers, 'enable_hint' => implode(' ', $hints));
+    }
+
+    return array(
+        'available' => $known,
+        'blockers' => array(),
+        'enable_hint' => $known ? '' : 'Not an element of this Avada install; it cannot be enabled.',
+    );
+}
+
+/**
+ * Ability: Enable an element disabled on this Avada install.
+ *
+ * Without confirm=true it only reports what would change. The caller must get the
+ * user's confirmation before calling again with confirm=true.
+ *
+ * @param array $params element_type, confirm.
+ * @return array|WP_Error
+ */
+function mcp_avada_pro_enable_element(array $params)
+{
+    $element_type = sanitize_key((string) ($params['element_type'] ?? ''));
+    if ('' === $element_type) {
+        return new WP_Error('invalid_element_type', 'Element type must be a non-empty string');
+    }
+
+    $availability = mcp_avada_pro_element_availability($element_type);
+    if ($availability['available']) {
+        return array('success' => true, 'data' => array('element_type' => $element_type, 'changed' => false, 'message' => 'Element is already available on this site.'));
+    }
+    if (empty($availability['blockers'])) {
+        return new WP_Error('element_not_enableable', 'Element type ' . $element_type . ' is not an element of this Avada install; it cannot be enabled.', array('element_type' => $element_type));
+    }
+
+    $changes = array();
+    foreach ($availability['blockers'] as $blocker) {
+        $changes[] = array(
+            'option' => $blocker['option'],
+            'setting' => $blocker['setting'],
+            'label' => $blocker['label'],
+            'location' => $blocker['location'],
+            'change' => 'theme_feature' === $blocker['kind'] ? '"0" -> "1"' : 'add ' . $element_type . ' to the enabled elements',
+        );
+    }
+
+    // Strict: the schema accepts "false"/"0" as booleans without converting them.
+    if (true !== ($params['confirm'] ?? false)) {
+        return array(
+            'success' => true,
+            'data' => array(
+                'element_type' => $element_type,
+                'requires_confirmation' => true,
+                'changed' => false,
+                'changes' => $changes,
+                'message' => 'Nothing changed. ' . $availability['enable_hint'] . ' Ask the user to confirm these site setting changes, then call again with confirm=true.',
+            ),
+        );
+    }
+
+    foreach ($availability['blockers'] as $blocker) {
+        if ('theme_feature' === $blocker['kind']) {
+            $options = get_option($blocker['option'], array());
+            $options = is_array($options) ? $options : array();
+            $options[$blocker['setting']] = '1';
+            update_option($blocker['option'], $options);
+        } else {
+            $settings = get_option('fusion_builder_settings', array());
+            $settings = is_array($settings) ? $settings : array();
+            $enabled = isset($settings['fusion_elements']) && is_array($settings['fusion_elements']) ? $settings['fusion_elements'] : array();
+            if (!in_array($element_type, $enabled, true)) {
+                $enabled[] = $element_type;
+            }
+            $settings['fusion_elements'] = array_values($enabled);
+            update_option('fusion_builder_settings', $settings);
+        }
+    }
+
+    if (function_exists('fusion_reset_all_caches')) {
+        fusion_reset_all_caches();
+    }
+
+    return array(
+        'success' => true,
+        'data' => array(
+            'element_type' => $element_type,
+            'changed' => true,
+            'changes' => $changes,
+            'message' => 'Enabled in the options listed in changes; on multilingual sites that is the current language only. The change applies from the next request.',
+        ),
+    );
+}
+
+/**
+ * Helper: Collect the element types found in column "elements" lists of a structure,
+ * at any depth. Raw passthrough elements and layout tags are skipped.
+ *
+ * @param mixed $node Structure or part of it.
+ * @return string[] Unique element types.
+ */
+function mcp_avada_pro_collect_element_types($node)
+{
+    $types = array();
+    if (!is_array($node)) {
+        return $types;
+    }
+    $layout_tags = array('fusion_builder_container', 'fusion_builder_row', 'fusion_builder_column', 'fusion_builder_row_inner', 'fusion_builder_column_inner', 'fusion_builder_next_page', 'fusion_builder_form_step');
+    foreach ($node as $key => $value) {
+        if ('elements' === $key && is_array($value)) {
+            foreach ($value as $element) {
+                $type = is_array($element) && isset($element['type']) && is_string($element['type']) ? sanitize_key($element['type']) : '';
+                if ('' !== $type && '__passthrough__' !== $type && !in_array($type, $layout_tags, true)) {
+                    $types[] = $type;
+                }
+            }
+        }
+        if (is_array($value)) {
+            $types = array_merge($types, mcp_avada_pro_collect_element_types($value));
+        }
+    }
+    return array_values(array_unique($types));
 }
 
 /**

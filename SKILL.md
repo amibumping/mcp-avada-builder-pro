@@ -40,7 +40,7 @@ Use this skill when you need to:
 - WordPress 6.9+ (Abilities API is in core) and the official [MCP Adapter](https://github.com/WordPress/mcp-adapter) plugin for MCP access
 - User must have `edit_posts` capability (read) or `edit_post` for specific pages (write)
 
-## Available Abilities (23)
+## Available Abilities (24)
 
 ### Page Management
 
@@ -193,7 +193,12 @@ Restructure matching row elements into vertical columns.
 ### Schema Introspection
 
 #### avada-pro/list-element-types
-List all 56 registered Fusion Builder element types with their names, categories, and descriptions. No parameters required.
+List all 56 registered Fusion Builder element types with their names, categories, and descriptions. No parameters required. Each element also has `available` (usable on this site). Unavailable elements add `enable_hint` (where to switch it on) and `enableable` (whether `enable-element` can switch it on).
+
+#### avada-pro/enable-element
+Enable an element that is disabled on this site: a theme feature (Avada FAQs, Avada Slider, Avada Portfolio, Avada Forms in Avada > Options > Advanced > Post Types) or a builder element (Avada > Builder Options > Elements). Administrators only.
+- `element_type` (required): Element tag, e.g. `fusion_faq`.
+- `confirm` (optional, default: `false`): Without it, nothing changes and the response lists the setting `changes` (`requires_confirmation: true`). Works for any element, so it is also the availability check for elements outside the curated list. Call again with `confirm: true` (JSON boolean; strings such as "true" are ignored) only after the user has confirmed those changes. On multilingual sites the theme options of the current language are changed.
 
 #### avada-pro/get-element-schema
 Get the full parameter schema for a specific element type.
@@ -315,6 +320,7 @@ Use this deterministic flow for every write task:
 1. **MCP adapter preflight**
    - Run `avada-pro/get-info`.
    - Confirm plugin/theme/element registry is reachable.
+   - Before building with an element (FAQs, a slider, a form, a portfolio...), check it is available on this site: `list-element-types` (`available`) or `enable-element` without `confirm`. If it is not, STOP before building anything: tell the user what is disabled and where, and ask whether they enable it themselves or want you to. Only after the user confirms, call `enable-element` with `confirm: true`.
 2. **Page integrity preflight**
    - Run `avada-pro/validate-page-structure`.
    - If health issues are reported, stop and run repair flow (`dry_run=true`) before edits.
@@ -448,6 +454,7 @@ powershell -ExecutionPolicy Bypass -File tools/verify_avada_rendered_vars.ps1 `
 - **Schema shows 0 params**: Runtime registry not available in REST context; use `get-element-defaults` instead
 - **Input validation error on GET**: Abilities with required params use POST (not GET)
 - **"Attributes not supported by ... in the installed Fusion Builder X"**: The option does not exist in this site's Avada version (Avada would silently ignore it). Check `get-element-defaults` for the options this version has; pass `allow_unknown_attributes: true` only when you know the attribute is valid. Elements without a runtime schema are not checked.
+- **"Element type X is disabled in this Avada install"** / **"is not registered in this Avada install"**: Each site enables its own set of Avada elements (Avada > Builder Options > Elements, plus post types such as FAQ). `add-element` and `replace-content` refuse element types this site does not render, because Avada would print the shortcode as plain text. The message says where to enable it. Tell the user; with their confirmation, an administrator can enable it with `enable-element` (`confirm: true`). `replace-content` only checks types the page does not already contain, so pages with legacy elements stay editable.
 
 ## REST API Usage
 

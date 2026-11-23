@@ -104,7 +104,7 @@ Add a new container with row and column to a page.
 - `column_type` (optional, default: `1_1`): Column type
 
 #### avada-pro/add-element
-Add a new element to a specific container/row/column position. Validates element type against registry and media fields.
+Add a new element to a specific container/row/column position. Validates element type against registry and media fields, and refuses attributes the installed Avada version does not define for that element.
 
 **Parameters:**
 - `page_id` (required): WordPress page/post ID
@@ -114,17 +114,19 @@ Add a new element to a specific container/row/column position. Validates element
 - `column_index` (optional, default: `0`): Target column index
 - `attributes` (optional): Element attributes object
 - `content` (optional): Element content (HTML/text)
+- `allow_unknown_attributes` (optional, default: `false`): Write attributes the installed Avada version does not define
 
 **Returns:** `path` and `canonical_path` (stable identity after save).
 
 #### avada-pro/update-element
-Update an existing element's attributes and/or content by path. Validates media fields.
+Update an existing element's attributes and/or content by path. Validates media fields and refuses attributes the installed Avada version does not define for that element (existing attributes on the element are not checked).
 
 **Parameters:**
 - `page_id` (required): WordPress page/post ID
 - `element_path` (required): Path format: `container_X/row_Y/column_Z/element_W`
 - `attributes` (optional): Updated attributes object
 - `content` (optional): Updated content
+- `allow_unknown_attributes` (optional, default: `false`): Write attributes the installed Avada version does not define
 
 **Returns:** `path` and `canonical_path` (stable identity after save).
 
@@ -162,6 +164,7 @@ Batch update multiple elements in a single operation. Uses all-or-nothing valida
   - `element_path` (required): Element path
   - `attributes` (optional): Updated attributes
   - `content` (optional): Updated content
+- `allow_unknown_attributes` (optional, default: `false`): Write attributes the installed Avada version does not define. Without it, an unknown attribute fails the whole batch and the error message lists each failing update.
 
 #### avada-pro/replace-content
 Replace entire page content with new Avada Builder content. Validates structure schema, rejects empty/malformed content, and creates a backup before writing.
@@ -444,6 +447,7 @@ powershell -ExecutionPolicy Bypass -File tools/verify_avada_rendered_vars.ps1 `
 - **Changes not visible**: Clear Avada/page cache and hard refresh browser
 - **Schema shows 0 params**: Runtime registry not available in REST context; use `get-element-defaults` instead
 - **Input validation error on GET**: Abilities with required params use POST (not GET)
+- **"Attributes not supported by ... in the installed Fusion Builder X"**: The option does not exist in this site's Avada version (Avada would silently ignore it). Check `get-element-defaults` for the options this version has; pass `allow_unknown_attributes: true` only when you know the attribute is valid. Elements without a runtime schema are not checked.
 
 ## REST API Usage
 

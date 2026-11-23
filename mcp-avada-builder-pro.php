@@ -314,6 +314,7 @@ function mcp_avada_pro_register_abilities(): void
                     'column_index' => array('type' => 'integer', 'default' => 0),
                     'attributes' => array('type' => 'object'),
                     'content' => array('type' => 'string'),
+                    'allow_unknown_attributes' => array('type' => 'boolean', 'default' => false, 'description' => 'Write attributes the installed Avada version does not define (normally refused as unsupported_attribute).'),
                 ),
                 'required' => array('page_id', 'element_type'),
             ),
@@ -359,6 +360,7 @@ function mcp_avada_pro_register_abilities(): void
                     'element_path' => array('type' => 'string', 'description' => 'Path like container_0/row_0/column_0/element_0'),
                     'attributes' => array('type' => 'object'),
                     'content' => array('type' => 'string'),
+                    'allow_unknown_attributes' => array('type' => 'boolean', 'default' => false, 'description' => 'Write attributes the installed Avada version does not define (normally refused as unsupported_attribute).'),
                 ),
                 'required' => array('page_id', 'element_path'),
             ),
@@ -830,6 +832,7 @@ function mcp_avada_pro_register_abilities(): void
                         ),
                         'description' => 'Array of updates, each with element_path and optional attributes/content',
                     ),
+                    'allow_unknown_attributes' => array('type' => 'boolean', 'default' => false, 'description' => 'Write attributes the installed Avada version does not define (normally refused as unsupported_attribute).'),
                 ),
                 'required' => array('page_id', 'updates'),
             ),
@@ -1563,6 +1566,10 @@ function mcp_avada_pro_add_element(array $params)
         if (is_wp_error($attr_validation)) {
             return $attr_validation;
         }
+        $support_validation = mcp_avada_pro_validate_attributes_supported($element_type, $params['attributes'], !empty($params['allow_unknown_attributes']));
+        if (is_wp_error($support_validation)) {
+            return $support_validation;
+        }
         // P2-3: Validate media-specific fields
         $media_validation = mcp_avada_pro_validate_media_attributes($element_type, $params['attributes']);
         if (is_wp_error($media_validation)) {
@@ -1708,6 +1715,10 @@ function mcp_avada_pro_update_element(array $params)
             $found_element_type = $element['type'];
             // P2-3: Validate media-specific fields now that we know the element type
             if (isset($params['attributes']) && !empty($params['attributes'])) {
+                $support_validation = mcp_avada_pro_validate_attributes_supported($found_element_type, $params['attributes'], !empty($params['allow_unknown_attributes']));
+                if (is_wp_error($support_validation)) {
+                    return $support_validation;
+                }
                 $media_validation = mcp_avada_pro_validate_media_attributes($found_element_type, $params['attributes']);
                 if (is_wp_error($media_validation)) {
                     return $media_validation;
@@ -2230,6 +2241,123 @@ function mcp_avada_pro_validate_element_attributes($attributes)
     }
 
     return true;
+}
+
+/**
+ * Helper: Attribute names the installed Avada version accepts for an element type.
+ *
+ * Built from the runtime FusionSC_* defaults plus the runtime param map, expanding
+ * composite params (dimension sub-fields, typography choices) and responsive
+ * _medium/_small variants. Returns null when no schema is available, so callers
+ * can skip the check instead of rejecting everything.
+ *
+ * @param string $element_type
+ * @return array<string,bool>|null
+ */
+function mcp_avada_pro_get_known_attribute_names($element_type)
+{
+    static $cache = array();
+    $element_type = sanitize_key((string) $element_type);
+    if (array_key_exists($element_type, $cache)) {
+        return $cache[$element_type];
+    }
+
+    $known = array();
+
+    $defaults = mcp_avada_pro_get_element_defaults(array('element_type' => $element_type));
+    if (is_array($defaults) && 'runtime_class' === ($defaults['data']['source'] ?? '') && is_array($defaults['data']['defaults'])) {
+        foreach (array_keys($defaults['data']['defaults']) as $name) {
+            $known[(string) $name] = true;
+        }
+    }
+
+    $runtime = mcp_avada_pro_get_runtime_elements();
+    $params = isset($runtime[$element_type]['params']) && is_array($runtime[$element_type]['params']) ? $runtime[$element_type]['params'] : array();
+    foreach ($params as $param) {
+        if (!is_array($param) || empty($param['param_name'])) {
+            continue;
+        }
+        $names = array((string) $param['param_name']);
+        $type = $param['type'] ?? '';
+        if ('dimension' === $type && isset($param['value']) && is_array($param['value'])) {
+            $names = array_merge($names, array_map('strval', array_keys($param['value'])));
+        }
+        if ('typography' === $type && isset($param['choices']) && is_array($param['choices'])) {
+            foreach ($param['choices'] as $choice_key => $attr_name) {
+                if (!is_string($attr_name) || '' === $attr_name) {
+                    continue;
+                }
+                if ('font-family' === $choice_key) {
+                    $names[] = 'fusion_font_family_' . $attr_name;
+                    $names[] = 'fusion_font_variant_' . $attr_name;
+                } else {
+                    $names[] = $attr_name;
+                }
+            }
+        }
+        $responsive = !empty($param['responsive']);
+        foreach ($names as $name) {
+            $known[$name] = true;
+            if ($responsive) {
+                $known[$name . '_medium'] = true;
+                $known[$name . '_small'] = true;
+            }
+        }
+    }
+
+    if (empty($known)) {
+        $cache[$element_type] = null;
+        return null;
+    }
+
+    // Dynamic data payload Avada stores on any element that uses dynamic content.
+    $known['dynamic_params'] = true;
+
+    $cache[$element_type] = $known;
+    return $known;
+}
+
+/**
+ * Helper: Reject attributes the installed Avada version does not define for the element.
+ *
+ * Avada silently drops unknown shortcode attributes on render, so writing an option
+ * from a newer Avada version would save without effect. Skipped when the element has
+ * no runtime schema or when $allow_unknown is true.
+ *
+ * @param string $element_type
+ * @param array  $attributes
+ * @param bool   $allow_unknown
+ * @return bool|WP_Error
+ */
+function mcp_avada_pro_validate_attributes_supported($element_type, $attributes, $allow_unknown = false)
+{
+    if ($allow_unknown || !is_array($attributes) || empty($attributes)) {
+        return true;
+    }
+    $known = mcp_avada_pro_get_known_attribute_names($element_type);
+    if (null === $known) {
+        return true;
+    }
+    $unknown = array();
+    foreach (array_keys($attributes) as $name) {
+        if (!isset($known[(string) $name])) {
+            $unknown[] = (string) $name;
+        }
+    }
+    if (empty($unknown)) {
+        return true;
+    }
+    $version = defined('FUSION_BUILDER_VERSION') ? FUSION_BUILDER_VERSION : 'unknown';
+    return new WP_Error(
+        'unsupported_attribute',
+        sprintf(
+            'Attributes not supported by %s in the installed Fusion Builder %s: %s. Check avada-pro/get-element-defaults, or pass allow_unknown_attributes=true to write them anyway.',
+            $element_type,
+            $version,
+            implode(', ', $unknown)
+        ),
+        array('element_type' => $element_type, 'unknown_attributes' => $unknown, 'fusion_builder_version' => $version)
+    );
 }
 
 /**
@@ -3235,9 +3363,11 @@ function mcp_avada_pro_bulk_update(array $params)
         // Validate element exists at path
         $column = &$structure['containers'][$ci]['rows'][$ri]['columns'][$coli];
         $element_found = false;
+        $found_element_type = '';
         foreach ($column['elements'] as $el) {
             if ($el['id'] === $element_id) {
                 $element_found = true;
+                $found_element_type = (string) $el['type'];
                 break;
             }
         }
@@ -3253,6 +3383,11 @@ function mcp_avada_pro_bulk_update(array $params)
                 $validation_errors[] = array('index' => $idx, 'path' => $update['element_path'], 'error' => $attr_validation->get_error_message());
                 continue;
             }
+            $support_validation = mcp_avada_pro_validate_attributes_supported($found_element_type, $update['attributes'], !empty($params['allow_unknown_attributes']));
+            if (is_wp_error($support_validation)) {
+                $validation_errors[] = array('index' => $idx, 'path' => $update['element_path'], 'error' => $support_validation->get_error_message());
+                continue;
+            }
         }
 
         // Cache parsed path if all validations pass
@@ -3263,7 +3398,9 @@ function mcp_avada_pro_bulk_update(array $params)
     if (!empty($validation_errors)) {
         return new WP_Error(
             'validation_failed',
-            'Bulk update validation failed. No changes were applied.',
+            'Bulk update validation failed. No changes were applied. ' . implode(' | ', array_map(function ($e) {
+                return '[' . $e['index'] . '] ' . $e['path'] . ': ' . $e['error'];
+            }, $validation_errors)),
             array('validation_errors' => $validation_errors)
         );
     }

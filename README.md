@@ -28,6 +28,7 @@ and correctness fixes found while testing the plugin against a real Avada site
 - **Media:** accepts Avada's `id|size` format for `image_id`.
 - **Setup:** works with the Abilities API built into WordPress 6.9+ and the official `WordPress/mcp-adapter` plugin; no forked dependency plugins are needed. The setup guide below explains every step.
 - **Validation:** `add-element` rejects layout tags early, duplicate detection tells passthrough elements apart, and self-closing shortcodes count as balanced.
+- **Version-aware attributes:** `add-element`, `update-element` and `bulk-update` refuse attributes the installed Avada version does not define for the element (Avada would silently drop them), so options from a newer Avada are not written to an older site. Pass `allow_unknown_attributes: true` to override.
 
 The original license (GPL-2.0-or-later) and copyright are unchanged.
 
